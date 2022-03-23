@@ -16,9 +16,6 @@ namespace spool
 		//some of our contianer types cannot be moved or copied, so the thread pool can't either
 		thread_pool(const thread_pool& other) = delete;
 		thread_pool(thread_pool&& other) = delete;
-		
-
-
 
 	private:
 		class worker
