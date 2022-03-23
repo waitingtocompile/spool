@@ -11,15 +11,24 @@ namespace spool
 {
     using shared_semaphore = std::shared_ptr<std::atomic_flag>;
     constexpr size_t max_job_prerequisites = 1024;
+    class thread_pool;
 
     class job
     {
         friend thread_pool;
     public:
+        
+
+        job(const std::function<void()>& work)
+            :work(work),
+            completion_semaphore(std::make_shared<std::atomic_flag>()),
+            prerequisite_sempahores(max_job_prerequisites)
+        {}
+
         job(std::function<void()>&& work)
             :work(std::forward<std::function<void()>>(work)),
             completion_semaphore(std::make_shared<std::atomic_flag>()),
-            prerequisite_sempahores(std::make_unique<rigtorp::mpmc::Queue<shared_semaphore>>(max_job_prerequisites))
+            prerequisite_sempahores(max_job_prerequisites)
         {}
 
         template<typename R>
@@ -29,13 +38,35 @@ namespace spool
         {
             for (shared_semaphore& prerequisite : prerequisites_range)
             {
-                prerequisite_sempahores->push(prerequisite);
+                prerequisite_sempahores.push(prerequisite);
             }
         }
 
+        template<typename R>
+            requires std::ranges::input_range<R>&& std::convertible_to<std::iter_value_t<std::ranges::iterator_t<R>>, shared_semaphore>
+        job(const std::function<void()>& work, R prerequisites_range)
+            :job(work)
+        {
+            for (shared_semaphore& prerequisite : prerequisites_range)
+            {
+                prerequisite_sempahores.push(prerequisite);
+            }
+        }
+
+        job(std::function<void()>&& work, const shared_semaphore& prerequisite)
+            :job(std::forward<std::function<void()>>(work))
+        {
+            prerequisite_sempahores.push(prerequisite);
+        }
+
+        job(const std::function<void()>& work, const shared_semaphore& prerequisite)
+            :job(work)
+        {
+            prerequisite_sempahores.push(prerequisite);
+        }
+
         job(const job& other) = delete;
-        job(job&& other) = default;
-        job& operator=(job&& other) = default;
+        job(job&& other) = delete;
 
         //prevents execution from starting if it hasn't already, but does not cancel or block dependant tasks
         void cancel()
@@ -45,7 +76,7 @@ namespace spool
 
         void add_prerequisite(shared_semaphore& sem)
         {
-            prerequisite_sempahores->push(sem);
+            prerequisite_sempahores.push(sem);
         }
 
         operator shared_semaphore&()
@@ -54,6 +85,11 @@ namespace spool
         }
 
     private:
+        //create a dummy job. It can never be run, but we need it to handle the otuptut-parameter wierdness of the MPMPQueue
+        job()
+            :prerequisite_sempahores(0)
+        {}
+
         //returns true if the job is finished and should not be re-added to the queue
         bool try_run()
         {
@@ -63,12 +99,12 @@ namespace spool
             }
 
             shared_semaphore p;
-            while (prerequisite_sempahores->try_pop(p))
+            while (prerequisite_sempahores.try_pop(p))
             {
                 if (!p->test())
                 {
                     //we've hit an un-matched semaphore, put it back and refuse to run
-                    prerequisite_sempahores->push(p);
+                    prerequisite_sempahores.push(p);
                     return false;
                 }
             }
@@ -82,7 +118,6 @@ namespace spool
         std::function<void()> work;
         shared_semaphore completion_semaphore;
         //when a prerequisite is ready, it's removed from this list. New prerequisites can be added at runtime. Both together necessitates using the mpmc queue again
-        //since this structure isn't movable, we need to store it as a unique_ptr. Unfortunate, but unavoidable
-        std::unique_ptr<rigtorp::mpmc::Queue<shared_semaphore>> prerequisite_sempahores;
+        rigtorp::mpmc::Queue<shared_semaphore> prerequisite_sempahores;
     };
 }
