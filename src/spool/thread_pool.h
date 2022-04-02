@@ -10,69 +10,71 @@
 
 namespace spool
 {
-	shared_semaphore make_shared_semaphore()
-	{
-		return std::make_shared<std::atomic_flag>();
-	}
+	constexpr size_t max_unassigned_jobs = 2056;
+	constexpr size_t max_assigned_jobs = 1024;
 
 	class thread_pool
 	{
 	public:
-		thread_pool(unsigned int thread_count = std::thread::hardware_concurrency(), size_t max_unassigned_jobs = 2056, size_t max_assigned_jobs = 1024)
+		thread_pool(unsigned int thread_count = std::thread::hardware_concurrency())
 			:unassigned_jobs(max_unassigned_jobs)
 		{
 			for (int i = 0; i < thread_count; i++)
 			{
-				worker_threads.emplace_back(max_unassigned_jobs, this, i);
+				worker_threads.emplace_back();
+			}
+			for (int i = 0; i < thread_count; i++)
+			{
+				worker_threads[i].thread = std::thread(run_worker, this, i);
 			}
 		}
 
 		~thread_pool()
 		{
 			wait_exit();
+			//clean everything up, that means cancelling all held jobs and offering deletion
+			//we can play it a bit fast-and-loose with our cleanup, since all the worker threads are stopped by this point
+			detail::job* unassigned = nullptr;
+			while (unassigned_jobs.try_pop(unassigned))
+			{
+				unassigned->cancel();
+				detail::job::offer_delete(unassigned);
+			}
+
+			//local queues are handled by their deconstructors
 		}
 
-		//some of our container types cannot be moved or copied, and moving or copying would break the look-back on workers, so the thread pool can't either
+		//moving or copying breaks so much, so we simply won't permit it
 		thread_pool(const thread_pool& other) = delete;
 		thread_pool(thread_pool&& other) = delete;
 
-		template<typename... Args>
-			requires std::constructible_from<spool::job, Args...>
-		job& enqueue_job(Args... params)
-		{
-			static_assert(sizeof...(Args) > 0, "Cannot enqueue a job with no parameters");
-			std::unique_ptr<job> new_job = std::make_unique<job>(params...);
-			job& ref = *new_job;
-			unassigned_jobs.emplace(std::move(new_job));
-			return ref;
-		}
-
-		/*
-
-		job& enqueue_job(std::function<void()> work)
+		job_handle enqueue_job(std::function<void()> work)
 		{
 			//for now put it in the unassigned pile
-			std::unique_ptr<job> pjob= std::make_unique<job>(work);
-			job& ptr = *pjob;
-			unassigned_jobs.emplace(std::move(pjob));
-			return ptr;
+			detail::job* pjob = new detail::job(work);
+			job_handle handle(pjob);
+			unassigned_jobs.emplace(pjob);
+			return handle;
 		}
 		template<typename R>
-			requires std::ranges::input_range<R>&& std::convertible_to<std::iter_value_t<std::ranges::iterator_t<R>>, shared_semaphore>
-		job& enqueue_job(std::function<void()> work, R prerequisites)
+			requires std::ranges::input_range<R>&& std::convertible_to<std::iter_value_t<std::ranges::iterator_t<R>>, detail::job*>
+		job_handle enqueue_job(std::function<void()> work, R prerequisites)
 		{
 			//for now put it in the unassigned pile
-			std::unique_ptr<job> pjob = std::make_unique<job>(work, prerequisites);
-			job* ptr = pjob.get();
-			unassigned_jobs.emplace(std::move(pjob));
-			return *ptr;
-		}
-		job& enqueue_job(std::function<void()> work, shared_semaphore prerequisite)
-		{
-			
+			detail::job* pjob = new detail::job(work, prerequisites);
+			job_handle handle(pjob);
+			unassigned_jobs.emplace(pjob);
+			return handle;
 		}
 
-		*/
+		job_handle enqueue_job(std::function<void()> work, detail::job* prerequisite)
+		{
+			detail::job* pjob = new detail::job(work);
+			job_handle handle(pjob);
+			pjob->add_prerequisite(prerequisite);
+			unassigned_jobs.emplace(pjob);
+			return handle;
+		}
 
 		//prevent new tasks from being started by the thread pool
 		void exit()
@@ -88,106 +90,101 @@ namespace spool
 			{
 				worker.thread.join();
 			}
+			worker_threads.clear();
 		}
 
 	private:
 		struct worker
 		{
-			worker(size_t queue_size, thread_pool* pool, int worker_index)
-				:work_queue(queue_size), thread(run_worker, pool, worker_index)
+			worker()
+				:work_queue(max_assigned_jobs)
 			{}
 
-			detail::WorkStealingQueue<std::unique_ptr<job>> work_queue;
+			detail::WorkStealingQueue<detail::job*> work_queue;
 			std::thread thread;
 
-			
+			~worker()
+			{
+				while (!work_queue.empty())
+				{
+					auto j = work_queue.pop().value();
+					j->cancel();
+					detail::job::offer_delete(j);
+				}
+			}
 		};
 
-		std::unique_ptr<job> request_additional_job(int worker_index)
+		detail::job* next_job(int worker_index)
 		{
-			//start by trying unassigned jobs
-			std::unique_ptr<job> assigned_job;
+			std::optional<detail::job*> immediate_job = worker_threads[worker_index].work_queue.pop();
+			if (immediate_job.has_value())
+			{
+				return immediate_job.value();
+			}
+
+			//no job on own queue, try to pull from unassigned queue
+			detail::job* assigned_job = nullptr;
 			if (unassigned_jobs.try_pop(assigned_job))
 			{
+				//job poppped off unassigned queue, use that
 				return assigned_job;
 			}
+
 			//try to steal from other queues, going "left"
-			int steal_index = worker_index - 1;
+			int steal_index = worker_index;
 			while (steal_index != worker_index)
 			{
+				steal_index--;
 				//if we've wrapped around, reset back
 				if (steal_index < 0) steal_index = worker_threads.size() - 1;
-				std::optional<std::unique_ptr<job>> stolen_job = worker_threads[steal_index].work_queue.steal();
-				if (stolen_job.has_value()) return std::move(stolen_job.value());
-				steal_index--;
+				std::optional<detail::job*> stolen_job = worker_threads[steal_index].work_queue.steal();
+				if (stolen_job.has_value()) return stolen_job.value();
 			}
 			return nullptr;
 		}
 
 		static void run_worker(thread_pool* pool, int worker_index)
 		{
-			detail::WorkStealingQueue<std::unique_ptr<job>>* queue = &(pool->worker_threads[worker_index].work_queue);
+			std::deque<detail::job*> held_jobs;
 
 			while (!pool->exiting.test())
 			{
-				//pop jobs off our local queue until we can't any more
-				std::optional<std::unique_ptr<job>> found_job = queue->pop();
-				std::deque<job> held_jobs;
-				while (!pool->exiting.test() && found_job.has_value())
+				detail::job* next = pool->next_job(worker_index);
+				if (next != nullptr)
 				{
-					if (found_job.value()->try_run())
+					//we actually have a job, run it
+					if (next->try_run())
 					{
-						//a job finished, re-emplace all the held jobs
+						//job completed succesfully, offer to delete then dump all our held jobs back into the queue
+						detail::job::offer_delete(next);
+						next = nullptr;
+
 						while (!held_jobs.empty())
 						{
-							queue->push(std::move(held_jobs.back()));
+							pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
 							held_jobs.pop_back();
 						}
 					}
 					else
 					{
-						//the job couldn't run, hold it and grab another
-						held_jobs.emplace_back(std::move(found_job.value()));
+						//the job couldn't run, hold it
+						held_jobs.push_back(next);
 					}
-
-					found_job = queue->pop();
 				}
-				//we have nothing in the queue that can be run, try to grab unassigned jobs
-				//first we re-emplace all the held jobs
-				while (!held_jobs.empty())
+				else
 				{
-					queue->push(std::move(held_jobs.back()));
-					held_jobs.pop_back();
-				}
-
-				std::unique_ptr<job> additional_job = pool->request_additional_job(worker_index);
-				bool ran_sucessfully = false;
-				while (!pool->exiting.test() && additional_job != nullptr && !ran_sucessfully)
-				{
-					if (additional_job->try_run())
+					//no job offered, dump our held jobs back
+					while (!held_jobs.empty())
 					{
-						//a job finished, re-emplace all the held jobs
-						while (!held_jobs.empty())
-						{
-							queue->push(std::move(held_jobs.back()));
-							held_jobs.pop_back();
-						}
-						ran_sucessfully = true;
-					}
-					else
-					{
-						//the job couldn't run, hold it and grab another
-						held_jobs.emplace_back(std::move(found_job.value()));
-						additional_job = pool->request_additional_job(worker_index);
+						pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
+						held_jobs.pop_back();
 					}
 				}
-				
-				//go back to checking our own queue
 			}
 		}
 		
-		rigtorp::mpmc::Queue<std::unique_ptr<job>> unassigned_jobs;
-		std::vector<worker> worker_threads;
+		rigtorp::mpmc::Queue<detail::job*> unassigned_jobs;
+		std::deque<worker> worker_threads;
 		std::atomic_flag exiting;
 	};
 }
