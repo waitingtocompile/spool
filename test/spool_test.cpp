@@ -97,9 +97,3 @@ TEST(spool_test, LoadBalances)
 		ASSERT_LT(elem.second, ids.size() / 2) << "Over 50% of work is being done on a single thread. Load may not be properly balanced.";
 	}
 }
-
-TEST(spool_test, JobsDeleteWhenDone)
-{
-	//check that jobs actually get deleted when we're done with them. This is fucky, we need to squeeze out a job pointer from a handle then intentionally segfault on it
-	//TODO
-}
