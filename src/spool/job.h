@@ -26,6 +26,16 @@ namespace spool
             done.test_and_set();
         }
 
+        void add_prerequisite(std::shared_ptr<job> other)
+        {
+            if (other != nullptr && !(other->done.test()))
+            {
+                prerequisite_jobs.push(other);
+            }
+        }
+
+        
+
     private:
 
         job(const std::function<void()>& work)
@@ -39,24 +49,16 @@ namespace spool
             :job(work)
         {
             std::ranges::for_each(prerequisites_range, [&](job* j) {add_prerequisite(j); });
-        }
-
-        void add_prerequisite(std::shared_ptr<job> other)
-        {
-            if (other != nullptr && !(other->done.test()))
-            {
-                prerequisite_jobs.push(other);
-            }
-        }
+        }      
 
         //returns true if the job is finished and should not be re-added to the queue
         bool try_run()
         {
             if (done.test())
             {
+                //skip working if it's already "done"
                 return true;
             }
-
             std::shared_ptr<job> p;
             while (prerequisite_jobs.try_pop(p))
             {
@@ -79,5 +81,7 @@ namespace spool
         std::atomic_flag done;
         //when a prerequisite is ready, it's removed from this list. New prerequisites can be added at runtime. Both together necessitates using the mpmc queue again
         rigtorp::mpmc::Queue<std::shared_ptr<job>> prerequisite_jobs;
+
+        
     };
 }

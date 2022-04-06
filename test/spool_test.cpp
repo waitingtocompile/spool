@@ -97,3 +97,29 @@ TEST(spool_test, LoadBalances)
 		ASSERT_LT(elem.second, ids.size() / 2) << "Over 50% of work is being done on a single thread. Load may not be properly balanced.";
 	}
 }
+
+TEST(spool_test, ExecutionContextGood)
+{
+	spool::thread_pool pool;
+	std::atomic_flag done;
+	std::atomic_flag violated_pool;
+	std::atomic_flag violated_job;
+	std::shared_ptr<spool::job> job;
+	job = pool.enqueue_job([&]()
+		{
+			auto job_context = spool::thread_pool::get_execution_context();
+			if (job_context.pool != &pool) violated_pool.test_and_set();
+			if (job_context.active_job != job) violated_job.test_and_set();
+			done.test_and_set();
+		});
+
+	auto context = spool::thread_pool::get_execution_context();
+	EXPECT_EQ(context.pool, nullptr) << "Execution context pool offered on non-worker thread";
+	EXPECT_EQ(context.active_job.get(), nullptr) << "Execution context job offered on non-worker thread";
+
+	while (!done.test())
+	{}
+	EXPECT_FALSE(violated_pool.test()) << "Execution context offered non-matching pool on worker thread";
+	EXPECT_FALSE(violated_job.test()) << "Execution context offered non-matching job on worker thread";
+	
+}

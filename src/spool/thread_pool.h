@@ -13,6 +13,21 @@ namespace spool
 	constexpr size_t max_unassigned_jobs = 2056;
 	constexpr size_t max_assigned_jobs = 1024;
 
+	namespace detail
+	{
+		struct thread_context
+		{
+			thread_pool* pool;
+			int runner_index;
+		};
+	}
+
+	struct execution_context
+	{
+		thread_pool* pool;
+		std::shared_ptr<job> active_job;
+	};
+
 	class thread_pool
 	{
 	public:
@@ -21,7 +36,7 @@ namespace spool
 		{
 			for (int i = 0; i < thread_count; i++)
 			{
-				worker_threads.emplace_back();
+				worker_threads.emplace_back(i);
 			}
 			for (int i = 0; i < thread_count; i++)
 			{
@@ -65,6 +80,9 @@ namespace spool
 			return pjob;
 		}
 
+		static execution_context get_execution_context();
+
+
 		//prevent new tasks from being started by the thread pool
 		void exit()
 		{
@@ -85,17 +103,18 @@ namespace spool
 	private:
 		struct worker
 		{
-			worker()
-				:work_queue(max_assigned_jobs)
+			worker(int index)
+				:work_queue(max_assigned_jobs),
+				active_job(nullptr),
+				worker_index(index)
 			{}
 
 			detail::WorkStealingQueue<std::shared_ptr<job>> work_queue;
 			std::thread thread;
+			std::shared_ptr<job> active_job;
+			int worker_index;
 
-			~worker()
-			{
-
-			}
+			void run(thread_pool* pool);
 		};
 
 		std::shared_ptr<job> next_job(int worker_index)
@@ -129,45 +148,62 @@ namespace spool
 
 		static void run_worker(thread_pool* pool, int worker_index)
 		{
-			std::deque<std::shared_ptr<job>> held_jobs;
+			pool->worker_threads[worker_index].run(pool);
+		}
+		
+		rigtorp::mpmc::Queue<std::shared_ptr<job>> unassigned_jobs;
+		std::deque<worker> worker_threads;
+		std::atomic_flag exiting;
 
-			while (!pool->exiting.test())
+		inline static thread_local detail::thread_context context = { nullptr, -1 };
+	};
+
+	execution_context spool::thread_pool::get_execution_context()
+	{
+		if (thread_pool::context.pool != nullptr)
+		{
+			return { thread_pool::context.pool, thread_pool::context.pool->worker_threads[thread_pool::context.runner_index].active_job };
+		}
+		else return { nullptr, nullptr };
+	}
+
+	void thread_pool::worker::run(thread_pool* pool)
+	{
+		std::deque<std::shared_ptr<job>> held_jobs;
+		thread_pool::context = { pool, worker_index };
+		while (!pool->exiting.test())
+		{
+			active_job = pool->next_job(worker_index);
+			if (active_job != nullptr)
 			{
-				std::shared_ptr<job> next = pool->next_job(worker_index);
-				if (next != nullptr)
+				//we actually have a job, run it
+				if (active_job->try_run())
 				{
-					//we actually have a job, run it
-					if (next->try_run())
-					{
-						//job completed succesfully, offer to delete then dump all our held jobs back into the queue
-						next = nullptr;
+					//job completed succesfully, offer to delete then dump all our held jobs back into the queue
+					active_job = nullptr;
 
-						while (!held_jobs.empty())
-						{
-							pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
-							held_jobs.pop_back();
-						}
-					}
-					else
-					{
-						//the job couldn't run, hold it
-						held_jobs.push_back(next);
-					}
-				}
-				else
-				{
-					//no job offered, dump our held jobs back
 					while (!held_jobs.empty())
 					{
 						pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
 						held_jobs.pop_back();
 					}
 				}
+				else
+				{
+					//the job couldn't run, hold it
+					held_jobs.push_back(active_job);
+				}
+			}
+			else
+			{
+				//no job offered, dump our held jobs back
+				while (!held_jobs.empty())
+				{
+					pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
+					held_jobs.pop_back();
+				}
 			}
 		}
-		
-		rigtorp::mpmc::Queue<std::shared_ptr<job>> unassigned_jobs;
-		std::deque<worker> worker_threads;
-		std::atomic_flag exiting;
-	};
+	}
+	
 }
