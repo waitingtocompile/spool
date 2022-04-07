@@ -34,7 +34,10 @@ namespace spool
             }
         }
 
-        
+        bool is_done()
+        {
+            return done.test();
+        }
 
     private:
 

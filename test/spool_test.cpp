@@ -123,3 +123,17 @@ TEST(spool_test, ExecutionContextGood)
 	EXPECT_FALSE(violated_job.test()) << "Execution context offered non-matching job on worker thread";
 	
 }
+
+TEST(spool_test, EnqueueChildJob)
+{
+	spool::thread_pool pool;
+	std::atomic_flag done;
+	pool.enqueue_job([&]() {
+		spool::thread_pool::get_execution_context().pool->enqueue_job([&]() {done.test_and_set(); });
+		});
+	auto end = std::chrono::system_clock::now() + std::chrono::seconds(2);
+	while (!done.test() && end > std::chrono::system_clock::now())
+	{
+	}
+	ASSERT_TRUE(done.test()) << "Second-order task did not run";
+}

@@ -24,8 +24,8 @@ namespace spool
 
 	struct execution_context
 	{
-		thread_pool* pool;
-		std::shared_ptr<job> active_job;
+		thread_pool* const pool;
+		const std::shared_ptr<job> active_job;
 	};
 
 	class thread_pool
@@ -59,7 +59,7 @@ namespace spool
 		{
 			//we're breaking the no-new rule for shared stuff, since the constructors are private
 			std::shared_ptr<job> pjob(new job(work));
-			unassigned_jobs.emplace(pjob);
+			enqueue_job(pjob);
 			return pjob;
 		}
 		template<typename R>
@@ -68,7 +68,7 @@ namespace spool
 		{
 			//for now put it in the unassigned pile
 			std::shared_ptr<job> pjob(new job(work, prerequisites));
-			unassigned_jobs.emplace(pjob);
+			enqueue_job(pjob);
 			return pjob;
 		}
 
@@ -76,7 +76,7 @@ namespace spool
 		{
 			std::shared_ptr<job> pjob(new job(work));
 			pjob->add_prerequisite(prerequisite);
-			unassigned_jobs.emplace(pjob);
+			enqueue_job(pjob);
 			return pjob;
 		}
 
@@ -144,6 +144,18 @@ namespace spool
 				if (stolen_job.has_value()) return stolen_job.value();
 			}
 			return nullptr;
+		}
+
+		void enqueue_job(const std::shared_ptr<job>& new_job)
+		{
+			if (context.pool == this)
+			{
+				worker_threads[context.runner_index].work_queue.push(new_job);
+			}
+			else
+			{
+				unassigned_jobs.emplace(new_job);
+			}
 		}
 
 		static void run_worker(thread_pool* pool, int worker_index)
