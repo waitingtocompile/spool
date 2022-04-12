@@ -117,24 +117,13 @@ namespace spool
 		}
 
 		template<std::ranges::forward_range R>
-		void for_each_test(R& range, std::function<void(range_underlying<R>&)> func)
-		{
-			for (auto& elem : range)
-			{
-				func(elem);
-			}
-		}
-
-		template<std::ranges::forward_range R>
 		std::vector<std::shared_ptr<job>> for_each(R& range, std::function<void(range_underlying<R>&)> work)
 		{
 			std::vector<std::shared_ptr<job>> jobs;
-			auto chunks = detail::split_range(range, worker_threads.size());
-			for (const auto& chunk : chunks)
+			for (const auto& chunk : detail::split_range(range, worker_threads.size()))
 			{
-				std::cout << std::ranges::size(chunk) << std::endl;
 				jobs.emplace_back(enqueue_job([=]() {
-					for (auto elem : chunk)
+					for (auto& elem : chunk)
 					{
 						work(elem);
 					}
@@ -147,11 +136,10 @@ namespace spool
 		std::vector<std::shared_ptr<job>> for_each(R& range, std::function<void(range_underlying<R>&)> work, J prerequisites)
 		{
 			std::vector<std::shared_ptr<job>> jobs;
-			auto chunks = detail::split_range(range, worker_threads.size());
-			for (auto chunk : chunks)
+			for (const auto& chunk : detail::split_range(range, worker_threads.size()))
 			{
 				jobs.emplace_back(enqueue_job([=]() {
-					for (auto elem : chunk)
+					for (auto& elem : chunk)
 					{
 						work(elem);
 					}
@@ -164,8 +152,7 @@ namespace spool
 		std::vector<std::shared_ptr<job>> for_each(R& range, std::function<void(range_underlying<R>&)> work, std::shared_ptr<job> prerequisite)
 		{
 			std::vector<std::shared_ptr<job>> jobs;
-			auto chunks = detail::split_range(range, worker_threads.size());
-			for (auto chunk : chunks)
+			for (const auto& chunk : detail::split_range(range, worker_threads.size()))
 			{
 				jobs.emplace_back(enqueue_job([=]() {
 					for (auto elem : chunk)

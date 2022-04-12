@@ -146,12 +146,13 @@ TEST(spool_test, ParallelFor)
 	};
 
 	spool::thread_pool pool;
-	std::atomic_int waiting = 1000;
+	constexpr size_t count = 500;
+	std::atomic_int waiting = count;
 	//generate our list
-	std::array<box, 1000> arr;
+	std::array<box, count> arr;
 	pool.for_each(arr, [&](box& b)
 		{
-			b.i = 1;
+			b.i++;
 			waiting--;
 		});
 	while (waiting.load() != 0)
