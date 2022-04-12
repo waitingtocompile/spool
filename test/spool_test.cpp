@@ -137,3 +137,29 @@ TEST(spool_test, EnqueueChildJob)
 	}
 	ASSERT_TRUE(done.test()) << "Second-order task did not run";
 }
+
+TEST(spool_test, ParallelFor)
+{
+	struct box
+	{
+		int i = 0;
+	};
+
+	spool::thread_pool pool;
+	std::atomic_int waiting = 1000;
+	//generate our list
+	std::array<box, 1000> arr;
+	pool.for_each(arr, [&](box& b)
+		{
+			b.i = 1;
+			waiting--;
+		});
+	while (waiting.load() != 0)
+	{
+	}
+	for (box& b : arr)
+	{
+		//all should be 1
+		ASSERT_EQ(b.i, 1) << "One or more elements in parallel for-each was not altered or was altered incorrectly";
+	}
+}

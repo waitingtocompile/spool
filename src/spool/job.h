@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "MPMCQueue.h"
+#include "concepts.h"
 
 namespace spool
 {
@@ -46,8 +47,7 @@ namespace spool
             prerequisite_jobs(max_job_prerequisites)
         {}
 
-        template<typename R>
-            requires std::ranges::input_range<R>&& std::convertible_to<std::iter_value_t<std::ranges::iterator_t<R>>, job*>
+        template<job_range R>
         job(const std::function<void()>& work, R prerequisites_range)
             :job(work)
         {

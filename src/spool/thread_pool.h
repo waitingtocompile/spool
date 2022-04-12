@@ -3,13 +3,20 @@
 #include <vector>
 #include <deque>
 #include <memory>
+#include <ranges>
 
+#include "concepts.h"
 #include "wsq.h"
 #include "MPMCQueue.h"
 #include "job.h"
 
+#ifndef __cpp_lib_ranges
+#error "Spool requires a complete (or near complete) ranges implementation, check your compiler settings"
+#endif // !__cpp_lib_ranges
+
 namespace spool
 {
+
 	constexpr size_t max_unassigned_jobs = 2056;
 	constexpr size_t max_assigned_jobs = 1024;
 
@@ -20,6 +27,36 @@ namespace spool
 			thread_pool* pool;
 			int runner_index;
 		};
+
+		template<std::ranges::forward_range R>
+		std::vector<std::ranges::take_view<std::ranges::drop_view<std::ranges::ref_view<R>>>> split_range(R& range, size_t max_chunks)
+		{
+			std::vector<std::ranges::take_view<std::ranges::drop_view<std::ranges::ref_view<R>>>> views;
+
+			//if there's more chunks than elements in the range, return one chunk per element
+			if (max_chunks >= std::ranges::size(range))
+			{
+				for (int i = 0; i < std::ranges::size(range); i++)
+				{
+					 views.emplace_back(range | std::views::drop(i) | std::views::take(1));
+				}
+			}
+			else
+			{
+				//subdivide as normal
+				size_t chunk_size = std::ranges::size(range) / max_chunks;
+				size_t chunk_extra = std::ranges::size(range) % max_chunks;
+				
+				size_t step = 0;
+				for (size_t i = 0; i < max_chunks; i++)
+				{
+					size_t chunk = chunk_size + ((i < chunk_extra) ? 1 : 0);
+					views.emplace_back(range | std::views::drop(step) | std::views::take(chunk));
+					step += chunk;
+				}
+			}
+			return views;
+		}
 	}
 
 	struct execution_context
@@ -34,6 +71,7 @@ namespace spool
 		thread_pool(unsigned int thread_count = std::thread::hardware_concurrency())
 			:unassigned_jobs(max_unassigned_jobs)
 		{
+			assert(thread_count > 0);
 			for (int i = 0; i < thread_count; i++)
 			{
 				worker_threads.emplace_back(i);
@@ -46,9 +84,8 @@ namespace spool
 
 		~thread_pool()
 		{
+			//let all our child threads finish up
 			wait_exit();
-
-			//local queues are handled by their deconstructors
 		}
 
 		//moving or copying breaks so much, so we simply won't permit it
@@ -62,8 +99,7 @@ namespace spool
 			enqueue_job(pjob);
 			return pjob;
 		}
-		template<typename R>
-			requires std::ranges::input_range<R>&& std::convertible_to<std::iter_value_t<std::ranges::iterator_t<R>>, std::shared_ptr<job>>
+		template<job_range R>
 		std::shared_ptr<job> enqueue_job(std::function<void()> work, R prerequisites)
 		{
 			//for now put it in the unassigned pile
@@ -79,6 +115,69 @@ namespace spool
 			enqueue_job(pjob);
 			return pjob;
 		}
+
+		template<std::ranges::forward_range R>
+		void for_each_test(R& range, std::function<void(range_underlying<R>&)> func)
+		{
+			for (auto& elem : range)
+			{
+				func(elem);
+			}
+		}
+
+		template<std::ranges::forward_range R>
+		std::vector<std::shared_ptr<job>> for_each(R& range, std::function<void(range_underlying<R>&)> work)
+		{
+			std::vector<std::shared_ptr<job>> jobs;
+			auto chunks = detail::split_range(range, worker_threads.size());
+			for (const auto& chunk : chunks)
+			{
+				std::cout << std::ranges::size(chunk) << std::endl;
+				jobs.emplace_back(enqueue_job([=]() {
+					for (auto elem : chunk)
+					{
+						work(elem);
+					}
+				}));
+			}
+			return jobs;
+		}
+
+		template<std::ranges::forward_range R, job_range J>
+		std::vector<std::shared_ptr<job>> for_each(R& range, std::function<void(range_underlying<R>&)> work, J prerequisites)
+		{
+			std::vector<std::shared_ptr<job>> jobs;
+			auto chunks = detail::split_range(range, worker_threads.size());
+			for (auto chunk : chunks)
+			{
+				jobs.emplace_back(enqueue_job([=]() {
+					for (auto elem : chunk)
+					{
+						work(elem);
+					}
+				}), prerequisites);
+			}
+			return jobs;
+		}
+
+		template<std::ranges::forward_range R>
+		std::vector<std::shared_ptr<job>> for_each(R& range, std::function<void(range_underlying<R>&)> work, std::shared_ptr<job> prerequisite)
+		{
+			std::vector<std::shared_ptr<job>> jobs;
+			auto chunks = detail::split_range(range, worker_threads.size());
+			for (auto chunk : chunks)
+			{
+				jobs.emplace_back(enqueue_job([=]() {
+					for (auto elem : chunk)
+					{
+						work(elem);
+					}
+				}), prerequisite);
+			}
+			return jobs;
+		}
+
+
 
 		static execution_context get_execution_context();
 
@@ -144,6 +243,23 @@ namespace spool
 				if (stolen_job.has_value()) return stolen_job.value();
 			}
 			return nullptr;
+		}
+
+		template<std::ranges::forward_range R>
+		std::vector<std::shared_ptr<job>> create_jobs(R& range, std::function<void(range_underlying<R>&)> work)
+		{
+			std::vector<std::shared_ptr<job>> jobs;
+			int stride = worker_threads.size();
+			for (int offset = 0; offset < stride; offset++)
+			{
+				jobs.emplace_back(new job([=, &range]()
+					{
+						for (auto it = range.begin() + offset; it < range.end(); it += stride)
+						{
+							work(*it);
+						}
+					}));
+			}
 		}
 
 		void enqueue_job(const std::shared_ptr<job>& new_job)
