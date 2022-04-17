@@ -99,7 +99,7 @@ namespace spool
 			enqueue_job(pjob);
 			return pjob;
 		}
-		template<job_range R>
+		template<prerequisite_range R>
 		std::shared_ptr<job> enqueue_job(std::function<void()> work, R prerequisites)
 		{
 			//for now put it in the unassigned pile
@@ -108,7 +108,7 @@ namespace spool
 			return pjob;
 		}
 
-		std::shared_ptr<job> enqueue_job(std::function<void()> work, std::shared_ptr<job> prerequisite)
+		std::shared_ptr<job> enqueue_job(std::function<void()> work, std::shared_ptr<detail::prerequisite_base> prerequisite)
 		{
 			std::shared_ptr<job> pjob(new job(work));
 			pjob->add_prerequisite(prerequisite);

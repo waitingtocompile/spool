@@ -7,13 +7,14 @@
 
 #include "MPMCQueue.h"
 #include "concepts.h"
+#include "prerequisite.h"
 
 namespace spool
 {
     constexpr size_t max_job_prerequisites = 1024;
     class thread_pool;
 
-    class job
+    class job final : public detail::prerequisite_base
     {
         friend thread_pool;
     public:
@@ -27,11 +28,11 @@ namespace spool
             done.test_and_set();
         }
 
-        void add_prerequisite(std::shared_ptr<job> other)
+        void add_prerequisite(std::shared_ptr<detail::prerequisite_base> other)
         {
-            if (other != nullptr && !(other->done.test()))
+            if (other != nullptr && !(other->is_done()))
             {
-                prerequisite_jobs.push(other);
+                prerequisites.push(other);
             }
         }
 
@@ -44,10 +45,10 @@ namespace spool
 
         job(const std::function<void()>& work)
             :work(work),
-            prerequisite_jobs(max_job_prerequisites)
+            prerequisites(max_job_prerequisites)
         {}
 
-        template<job_range R>
+        template<prerequisite_range R>
         job(const std::function<void()>& work, R prerequisites_range)
             :job(work)
         {
@@ -62,13 +63,13 @@ namespace spool
                 //skip working if it's already "done"
                 return true;
             }
-            std::shared_ptr<job> p;
-            while (prerequisite_jobs.try_pop(p))
+            std::shared_ptr<detail::prerequisite_base> p;
+            while (prerequisites.try_pop(p))
             {
-                if (!p->done.test())
+                if (!p->is_done())
                 {
                     //we've hit an un-matched semaphore, put it back and refuse to run
-                    prerequisite_jobs.push(p);
+                    prerequisites.push(p);
                     return false;
                 }
             }
@@ -82,8 +83,8 @@ namespace spool
 
         std::function<void()> work;
         std::atomic_flag done;
-        //when a prerequisite is ready, it's removed from this list. New prerequisites can be added at runtime. Both together necessitates using the mpmc queue again
-        rigtorp::mpmc::Queue<std::shared_ptr<job>> prerequisite_jobs;
+
+        rigtorp::mpmc::Queue<std::shared_ptr<detail::prerequisite_base>> prerequisites;
 
         
     };
