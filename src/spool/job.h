@@ -43,16 +43,19 @@ namespace spool
 
     private:
 
-        job(const std::function<void()>& work)
-            :work(work),
+        template<typename F>
+            requires std::convertible_to<F, std::function<void()>>
+        job(F&& work)
+            :work(std::forward<F>(work)),
             prerequisites(max_job_prerequisites)
         {}
 
-        template<prerequisite_range R>
-        job(const std::function<void()>& work, R prerequisites_range)
-            :job(work)
+        template<typename F, prerequisite_range R>
+            requires std::convertible_to<F, std::function<void()>>
+        job(F&& work, const R& prerequisites_range)
+            :job(std::forward<F>(work))
         {
-            std::ranges::for_each(prerequisites_range, [&](job* j) {add_prerequisite(j); });
+            std::ranges::for_each(prerequisites_range, [&](std::shared_ptr<detail::prerequisite_base> j) {add_prerequisite(j); });
         }      
 
         //returns true if the job is finished and should not be re-added to the queue

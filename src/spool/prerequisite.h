@@ -8,6 +8,7 @@ namespace spool
 		{
 		public:
 			virtual bool is_done() = 0;
+			virtual ~prerequisite_base() {}
 		};
 	}
 }
