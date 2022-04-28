@@ -5,6 +5,7 @@
 #include <memory>
 #include <ranges>
 #include <array>
+#include <type_traits>
 
 #include "concepts.h"
 #include "wsq.h"
@@ -77,6 +78,7 @@ namespace spool
 	class thread_pool
 	{
 	public:
+
 		thread_pool(unsigned int thread_count = std::thread::hardware_concurrency())
 			:unassigned_jobs(max_unassigned_jobs)
 		{
@@ -185,6 +187,29 @@ namespace spool
 		}
 		
 #pragma endregion data_job
+
+#pragma region shared_resource_job
+
+		template<typename F, typename P, typename ... Ps>
+			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
+		std::shared_ptr<job> enqueue_job(F&& func, P& provider, Ps& ... providers)
+		{
+			return enqueue_job(create_data_job_func<F, P, Ps ...>(std::forward<F>(func), provider, providers...));
+		}
+
+		template<typename F, typename P, typename ... Ps, prerequisite_range R>
+			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
+		std::shared_ptr<job> enqueue_job(F&& func, P& provider, Ps& ... providers, const R& prerequisites)
+		{
+			return enqueue_job(create_data_job_func<F, P, Ps ...>(std::forward<F>(func), provider, providers...), prerequisites);
+		}
+
+		template<typename F, typename P, typename ... Ps>
+			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
+		std::shared_ptr<job> enqueue_job(F&& func, P& provider, Ps& ... providers, std::shared_ptr<detail::prerequisite_base> prerequisite)
+		{
+			return enqueue_job(create_data_job_func<F, P ...>(std::forward<F>(func), provider, providers...), std::move(prerequisite));
+		}
 		
 #pragma region impl_helpers
 		template<std::ranges::forward_range R, std::copy_constructible F>
@@ -333,16 +358,70 @@ namespace spool
 			requires std::invocable<F, T&>
 		static std::function<void()> create_data_job_func(F&& func, std::shared_ptr<job_data<T>> data)
 		{
-			if constexpr(std::is_rvalue_reference_v<F>)
+			if constexpr(std::is_rvalue_reference_v<F&&>)
 			{
 				//move it in
-				return [=, f = std::move(func)](){func(extract(data)); };
+				return [data = std::move(data), f = std::move(func)](){f(extract(data)); };
 			}
 			else
 			{
 				//copy as normal
-				return [=]() {func(extract(data)); };
+				return [=, data = std::move(data)]() {func(extract(data)); };
 			}
+		}
+
+		template<typename F, typename P>
+		requires std::invocable<F, provider_underlying_type<P>&>
+		std::function<bool()> create_data_job_func(F&& func, P& provider)
+		{
+			return [f = std::forward<F>(func), &provider] ()
+			{
+				auto handle = provider.get();
+				if (handle.has())
+				{
+					if constexpr (std::is_same_v<std::invoke_result_t<F, provider_underlying_type<P>&>, bool>)
+					{
+						return f(handle.get());
+					}
+					else
+					{
+						f(handle.get());
+						return true;
+					}
+				}
+				else
+				{
+					return false;
+				}
+			};
+		}
+
+		template<typename F, typename P, typename P2, typename ... Ps>
+		requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<P2>&, provider_underlying_type<Ps...>&>
+		std::function<bool()> create_data_job_func(F&& func, P& provider, P2& provider2, Ps& ... providers)
+		{
+			std::function<bool(provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ...)> next_func =
+				[f = std::forward<F>(func), &provider](provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ... params)
+			{
+				auto handle = provider.get();
+				if (handle.has())
+				{
+					if constexpr (std::is_same_v<std::invoke_result_t<F, provider_underlying_type<P>&, provider_underlying_type<P2>&, provider_underlying_type<Ps...>&>, bool>)
+					{
+						return f(handle.get(), param2, params ...);
+					}
+					else
+					{
+						f(handle.get(), param2, params ...);
+						return true;
+					}
+				}
+				else
+				{
+					return false;
+				}
+			};
+			return create_data_job_func(next_func, provider2, providers ...);
 		}
 
 		void enqueue_job(const std::shared_ptr<job>& new_job)

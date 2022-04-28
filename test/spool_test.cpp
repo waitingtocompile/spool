@@ -181,3 +181,10 @@ TEST(spool_test, DataJob)
 	ASSERT_NE(i, 3) << "data was in an invalid state when work occurred";
 	ASSERT_EQ(i, 2) << "work was done wrongly in an unexpected way";
 }
+
+TEST(spool_test, SharedResourceJob)
+{
+	spool::thread_pool pool;
+	//TODO: shared resource tests
+
+}
