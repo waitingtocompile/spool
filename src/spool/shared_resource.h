@@ -28,7 +28,7 @@ namespace spool
 	};
 
 	template<typename T, typename R>
-		requires can_provide_read<T, R>
+		requires can_provide_write<T, R>
 	class write_provider
 	{
 	public:
@@ -68,11 +68,11 @@ namespace spool
 		struct read_handle
 		{
 		public:
-			read_handle(shared_resource<T>* source)
+			read_handle(shared_resource* source)
 				:source(source)
-			{
+			{}
 
-			}
+			read_handle(const read_handle& other) = delete;
 
 			bool has()
 			{
@@ -86,11 +86,11 @@ namespace spool
 
 			~read_handle()
 			{
-				if(source != nullptr) source->readers--;
+				if (source != nullptr) source->readers--;
 			}
 
 		private:
-			shared_resource<T>* source;
+			shared_resource* source;
 			
 		};
 
@@ -98,9 +98,9 @@ namespace spool
 		{
 			write_handle(shared_resource<T>* source)
 				:source(source)
-			{
+			{}
 
-			}
+			write_handle(const write_handle& other) = delete;
 
 			bool has()
 			{
@@ -121,7 +121,7 @@ namespace spool
 			shared_resource<T>* source;
 		};
 
-		read_handle get_read_handle()
+		auto create_read_handle()
 		{
 			readers++;
 			if (writer.test())
@@ -136,7 +136,7 @@ namespace spool
 			}
 		}
 
-		write_handle get_write_handle()
+		auto create_write_handle()
 		{
 			if (writer.test_and_set())
 			{
@@ -155,12 +155,12 @@ namespace spool
 			}
 		}
 
-		read_provider<T, shared_resource<T>> get_read_provider()
+		auto create_read_provider()
 		{
 			return read_provider<T, shared_resource<T>>(this);
 		}
 
-		write_provider<T, shared_resource<T>> get_write_provider()
+		auto create_write_provider()
 		{
 			return write_provider<T, shared_resource<T>>(this);
 		}

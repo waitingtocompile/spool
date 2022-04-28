@@ -190,23 +190,26 @@ namespace spool
 
 #pragma region shared_resource_job
 
+		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
 		template<typename F, typename P, typename ... Ps>
 			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_job(F&& func, P& provider, Ps& ... providers)
+		std::shared_ptr<job> enqueue_job(F&& func, const P& provider, const Ps&& ... providers)
 		{
 			return enqueue_job(create_data_job_func<F, P, Ps ...>(std::forward<F>(func), provider, providers...));
 		}
 
+		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
 		template<typename F, typename P, typename ... Ps, prerequisite_range R>
 			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_job(F&& func, P& provider, Ps& ... providers, const R& prerequisites)
+		std::shared_ptr<job> enqueue_job(F&& func, const P& provider, const Ps& ... providers, const R& prerequisites)
 		{
 			return enqueue_job(create_data_job_func<F, P, Ps ...>(std::forward<F>(func), provider, providers...), prerequisites);
 		}
 
+		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
 		template<typename F, typename P, typename ... Ps>
 			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_job(F&& func, P& provider, Ps& ... providers, std::shared_ptr<detail::prerequisite_base> prerequisite)
+		std::shared_ptr<job> enqueue_job(F&& func, const P& provider, const Ps& ... providers, std::shared_ptr<detail::prerequisite_base> prerequisite)
 		{
 			return enqueue_job(create_data_job_func<F, P ...>(std::forward<F>(func), provider, providers...), std::move(prerequisite));
 		}
@@ -372,9 +375,9 @@ namespace spool
 
 		template<typename F, typename P>
 		requires std::invocable<F, provider_underlying_type<P>&>
-		std::function<bool()> create_data_job_func(F&& func, P& provider)
+		std::function<bool()> create_data_job_func(F&& func, const P& provider)
 		{
-			return [f = std::forward<F>(func), &provider] ()
+			return [f = std::forward<F>(func), provider] ()
 			{
 				auto handle = provider.get();
 				if (handle.has())
@@ -398,10 +401,10 @@ namespace spool
 
 		template<typename F, typename P, typename P2, typename ... Ps>
 		requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<P2>&, provider_underlying_type<Ps...>&>
-		std::function<bool()> create_data_job_func(F&& func, P& provider, P2& provider2, Ps& ... providers)
+		std::function<bool()> create_data_job_func(F&& func, const P& provider, const P2& provider2, const Ps& ... providers)
 		{
 			std::function<bool(provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ...)> next_func =
-				[f = std::forward<F>(func), &provider](provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ... params)
+				[f = std::forward<F>(func), provider](provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ... params)
 			{
 				auto handle = provider.get();
 				if (handle.has())

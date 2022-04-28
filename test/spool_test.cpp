@@ -185,6 +185,5 @@ TEST(spool_test, DataJob)
 TEST(spool_test, SharedResourceJob)
 {
 	spool::thread_pool pool;
-	//TODO: shared resource tests
-
+	spool::shared_resource<int> num;
 }
