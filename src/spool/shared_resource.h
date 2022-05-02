@@ -13,12 +13,12 @@ namespace spool
 			:resource(resource)
 		{}
 
-		auto get()
+		auto get() const
 		{
 			return resource->create_read_handle();
 		}
 
-		R& get_resource()
+		R& get_resource() const
 		{
 			return *resource;
 		}
@@ -36,12 +36,12 @@ namespace spool
 			:resource(resource)
 		{}
 
-		auto get()
+		auto get() const
 		{
 			return resource->create_write_handle();
 		}
 
-		R& get_resource()
+		R& get_resource() const
 		{
 			return *resource;
 		}
@@ -74,12 +74,12 @@ namespace spool
 
 			read_handle(const read_handle& other) = delete;
 
-			bool has()
+			bool has() const
 			{
 				return source != nullptr;
 			}
 
-			const T& get()
+			const T& get() const
 			{
 				return source->data;
 			}

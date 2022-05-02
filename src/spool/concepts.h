@@ -26,7 +26,7 @@ namespace spool
 
 
 	template<typename H, typename T>
-	concept shared_resource_handle = requires (H h)
+	concept shared_resource_handle = requires (const H h)
 	{
 		{h.get()} -> std::convertible_to<T&>;
 		{h.has()} -> std::convertible_to<bool>;
