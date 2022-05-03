@@ -12,7 +12,11 @@
 
 namespace spool
 {
-    constexpr size_t max_job_prerequisites = 1024;
+    namespace detail
+    {
+        struct nil {};
+        constexpr size_t max_job_prerequisites = 1024;
+    }
     class thread_pool;
 
     class job final : public detail::prerequisite_base
@@ -45,17 +49,25 @@ namespace spool
     private:
         template<typename F>
             requires std::convertible_to<F, std::function<void()>> || std::convertible_to<F, std::function<bool()>>
-        job(F&& work)
+        job(F && work, detail::nil = {})
             :work(std::forward<F>(work)),
-            prerequisites(max_job_prerequisites)
+            prerequisites(detail::max_job_prerequisites)
         {}
 
         template<typename F, prerequisite_range R>
             requires std::convertible_to<F, std::function<void()>> || std::convertible_to<F, std::function<bool()>>
-        job(F&& work, const R& prerequisites_range)
-            :job(std::forward<F>(work))
+        job(F && work, const R & prerequisites_range)
+            : job(std::forward<F>(work))
         {
             std::ranges::for_each(prerequisites_range, [&](std::shared_ptr<detail::prerequisite_base> j) {add_prerequisite(j); });
+        }
+
+        template<typename F>
+            requires std::convertible_to<F, std::function<void()>> || std::convertible_to<F, std::function<bool()>>
+        job(F&& work, std::shared_ptr<detail::prerequisite_base> prerequisite)
+            : job(std::forward<F>(work))
+        {
+            add_prerequisite(prerequisite);
         }
 
         //returns true if the job is finished and should not be re-added to the queue
@@ -71,7 +83,7 @@ namespace spool
             {
                 if (!p->is_done())
                 {
-                    //we've hit an un-matched semaphore, put it back and refuse to run
+                    //we've hit an un-matched prerequisite, put it back and refuse to run
                     prerequisites.push(p);
                     return false;
                 }
@@ -82,12 +94,9 @@ namespace spool
             {
                 std::get<std::function<void()>>(work)();
             }
-            else
+            else if (!(std::get<std::function<bool()>>(work)()))
             {
-                if (!(std::get<std::function<bool()>>(work)()))
-                {
                     return false;
-                }
             }
             
 
@@ -99,7 +108,5 @@ namespace spool
         std::atomic_flag done;
 
         rigtorp::mpmc::Queue<std::shared_ptr<detail::prerequisite_base>> prerequisites;
-
-        
     };
 }

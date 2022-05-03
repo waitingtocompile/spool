@@ -6,7 +6,7 @@ namespace spool
 {
 	template<typename T, typename R>
 	requires can_provide_read<T, R>
-	class read_provider
+	class read_provider final
 	{
 	public:
 		read_provider(R* resource)
@@ -24,12 +24,12 @@ namespace spool
 		}
 
 	private:
-		R* resource;
+		R* const resource;
 	};
 
 	template<typename T, typename R>
 		requires can_provide_write<T, R>
-	class write_provider
+	class write_provider final
 	{
 	public:
 		write_provider(R* resource)
@@ -47,12 +47,12 @@ namespace spool
 		}
 
 	private:
-		R* resource;
+		R* const resource;
 	};
 
 	//a simple shared resource wrapper, that allows for any number of readers and one writer
 	template<typename T>
-	class shared_resource
+	class shared_resource final
 	{
 	public:
 		template<typename ... Args>
@@ -65,7 +65,7 @@ namespace spool
 			return data;
 		}
 
-		struct read_handle
+		struct read_handle final
 		{
 		public:
 			read_handle(shared_resource* source)
@@ -90,11 +90,11 @@ namespace spool
 			}
 
 		private:
-			shared_resource* source;
+			shared_resource* const source;
 			
 		};
 
-		struct write_handle
+		struct write_handle final
 		{
 			write_handle(shared_resource<T>* source)
 				:source(source)
@@ -102,12 +102,12 @@ namespace spool
 
 			write_handle(const write_handle& other) = delete;
 
-			bool has()
+			bool has() const
 			{
 				return source != nullptr;
 			}
 
-			T& get()
+			T& get() const
 			{
 				return source->data;
 			}
@@ -118,7 +118,7 @@ namespace spool
 			}
 
 		private:
-			shared_resource<T>* source;
+			shared_resource* const source;
 		};
 
 		auto create_read_handle()

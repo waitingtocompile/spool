@@ -12,6 +12,7 @@
 #include "MPMCQueue.h"
 #include "job.h"
 #include "job_data.h"
+#include "job_utils.h"
 
 #ifndef __cpp_lib_ranges
 #error "Spool requires a complete (or near complete) ranges implementation, check your compiler settings"
@@ -25,57 +26,27 @@ namespace spool
 
 	namespace detail
 	{
-		struct thread_context
+		struct thread_context final
 		{
 			thread_pool* pool;
-			int runner_index;
+			size_t runner_index;
 		};
-
-		template<std::ranges::forward_range R>
-		std::vector<std::ranges::take_view<std::ranges::drop_view<std::ranges::ref_view<R>>>> split_range(R& range, size_t max_chunks)
-		{
-			std::vector<std::ranges::take_view<std::ranges::drop_view<std::ranges::ref_view<R>>>> views;
-
-			//if there's more chunks than elements in the range, return one chunk per element
-			if (max_chunks >= std::ranges::size(range))
-			{
-				for (int i = 0; i < std::ranges::size(range); i++)
-				{
-					 views.emplace_back(range | std::views::drop(i) | std::views::take(1));
-				}
-			}
-			else
-			{
-				//subdivide as normal
-				size_t chunk_size = std::ranges::size(range) / max_chunks;
-				size_t chunk_extra = std::ranges::size(range) % max_chunks;
-				
-				size_t step = 0;
-				for (size_t i = 0; i < max_chunks; i++)
-				{
-					size_t chunk = chunk_size + ((i < chunk_extra) ? 1 : 0);
-					views.emplace_back(range | std::views::drop(step) | std::views::take(chunk));
-					step += chunk;
-				}
-			}
-			return views;
-		}
 	}
 
-	struct execution_context
+	struct execution_context final
 	{
-		thread_pool* const pool;
-		const std::shared_ptr<job> active_job;
+		thread_pool* pool;
+		std::shared_ptr<job> active_job;
 	};
 
 	template<typename T>
-	struct data_job
+	struct data_job final
 	{
-		std::shared_ptr<job> job;
-		std::shared_ptr<job_data<T>> data_handle;
+		const std::shared_ptr<job> job;
+		const std::shared_ptr<job_data<T>> data_handle;
 	};
 
-	class thread_pool
+	class thread_pool final
 	{
 	public:
 
@@ -83,11 +54,11 @@ namespace spool
 			:unassigned_jobs(max_unassigned_jobs)
 		{
 			assert(thread_count > 0);
-			for (int i = 0; i < thread_count; i++)
+			for (unsigned int i = 0; i < thread_count; i++)
 			{
 				worker_threads.emplace_back(i);
 			}
-			for (int i = 0; i < thread_count; i++)
+			for (unsigned int i = 0; i < thread_count; i++)
 			{
 				worker_threads[i].thread = std::thread(run_worker, this, i);
 			}
@@ -104,34 +75,19 @@ namespace spool
 		thread_pool(thread_pool&& other) = delete;
 
 #pragma region base_job
-		//TODO: consider moving these to use std::invocable like the other enqueue functions, would require wrapping and a specialisation for std::functions
 
-		template<typename F>
-			requires std::convertible_to<F, std::function<void()>>
+		template<job_func F>
 		std::shared_ptr<job> enqueue_job(F&& work)
 		{
-			//we're breaking the no-new rule for shared stuff, since the constructors are private
-			std::shared_ptr<job> pjob(new job(std::forward<F>(work)));
+			const std::shared_ptr<job> pjob(new job(std::forward<F>(work)));
 			enqueue_job(pjob);
 			return pjob;
 		}
 
-		template<typename F, prerequisite_range R>
-			requires std::convertible_to<F, std::function<void()>>
-		std::shared_ptr<job> enqueue_job(F&& work, const R& prerequisites)
+		template<job_func F, usable_prerequisite P>
+		std::shared_ptr<job> enqueue_job(F&& work, P&& prerequisite)
 		{
-			//for now put it in the unassigned pile
-			std::shared_ptr<job> pjob(new job(std::forward<F>(work), prerequisites));
-			enqueue_job(pjob);
-			return pjob;
-		}
-
-		template<typename F>
-			requires std::convertible_to<F, std::function<void()>>
-		std::shared_ptr<job> enqueue_job(F&& work, std::shared_ptr<detail::prerequisite_base> prerequisite)
-		{
-			std::shared_ptr<job> pjob(new job(std::forward<F>(work)));
-			pjob->add_prerequisite(prerequisite);
+			const std::shared_ptr<job> pjob(new job(std::forward<F>(work), std::forward<P>(prerequisite)));
 			enqueue_job(pjob);
 			return pjob;
 		}
@@ -139,51 +95,29 @@ namespace spool
 #pragma endregion base_job
 
 #pragma region data_job
-		
-		template<typename T, typename F>
-			requires std::invocable<F, T&>
-		data_job<T> enqueue_job(F&& work)
-		{
-			return enqueue_job(std::forward<F>(work), std::make_shared<job_data<T>>());
-		}
 
 		template<typename T, typename F>
 			requires std::invocable<F, T&>
-		data_job<T> enqueue_job(F&& work, std::shared_ptr<job_data<T>> data)
+		data_job<T> enqueue_data_job(F&& work, std::shared_ptr<job_data<T>> data = std::make_shared<job_data<T>>())
 		{
-			return { enqueue_job(create_shared_job_func(std::forward<F>(work), data), data), std::move(data)};
+			return { enqueue_job(detail::create_data_job_func(std::forward<F>(work), data), data), std::move(data)};
 		}
 		
-		template<typename T, typename F>
+		template<typename T, typename F, usable_prerequisite P>
 			requires std::invocable<F, T&>
-		data_job<T> enqueue_job(F&& work, std::shared_ptr<detail::prerequisite_base> prerequisite)
+		data_job<T> enqueue_data_job(F&& work, P&& prerequisite)
 		{
-			return enqueue_job(std::forward<F>(work), std::make_shared<job_data<T>>(), prerequisite);
+			return enqueue_data_job(std::forward<F>(work), std::make_shared<job_data<T>>(), std::forward(prerequisite));
 		}
 
-		template<typename T, typename F>
+		template<typename T, typename F, usable_prerequisite P>
 			requires std::invocable<F, T&>
-		data_job<T> enqueue_job(F&& work, std::shared_ptr<job_data<T>> data, std::shared_ptr<detail::prerequisite_base> prerequisite)
+		data_job<T> enqueue_data_job(F&& work, std::shared_ptr<job_data<T>> data, P&& prerequisite)
 		{
-			std::array<std::shared_ptr<detail::prerequisite_base>, 2> prereqs{ data, prerequisite };
-			return { enqueue_job(create_shared_job_func(std::forward<F>(work), data), prereqs), std::move(data) };
-		}
-		
-		template<typename T, typename F, prerequisite_range R>
-			requires std::invocable<F, T&>
-		data_job<T> enqueue_job(F&& work, const R& prerequisites)
-		{
-			return enqueue_job(std::forward(work), prerequisites);
-		}
-
-		template<typename T, typename F, prerequisite_range R>
-			requires std::invocable<F, T&>
-		data_job<T> enqueue_job(F&& work, std::shared_ptr<job_data<T>> data, const R& prerequisites)
-		{
-			std::shared_ptr<job> pjob(new job(create_shared_job_func(std::forward<F>(work), data), prerequisites));
+			const std::shared_ptr<job> pjob(new job(detail::create_data_job_func(std::forward<F>(work), data), std::forward<P>(prerequisite)));
 			pjob->add_prerequisite(data);
 			enqueue_job(pjob);
-			return (std::move(pjob), std::move(data));
+			return { std::move(pjob), std::move(data) };
 		}
 		
 #pragma endregion data_job
@@ -191,27 +125,19 @@ namespace spool
 #pragma region shared_resource_job
 
 		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
-		template<typename F, typename P, typename ... Ps>
-			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_job(F&& func, const P& provider, const Ps&& ... providers)
+		template<typename F, typename ... Ps>
+			requires std::invocable<F, provider_underlying_type<Ps>& ...>
+		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, const Ps&& ... providers)
 		{
-			return enqueue_job(create_shared_job_func<F, P, Ps ...>(std::forward<F>(func), provider, providers...));
+			return enqueue_job(create_data_job_func<F, Ps ...>(std::forward<F>(func), providers...));
 		}
 
 		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
-		template<typename F, typename P, typename ... Ps, prerequisite_range R>
-			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_job(F&& func, const P& provider, const Ps& ... providers, const R& prerequisites)
+		template<typename F, typename ... Ps, usable_prerequisite Pr>
+			requires std::invocable<F, provider_underlying_type<Ps>& ...>
+		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, const Ps& ... providers, Pr&& prerequisite)
 		{
-			return enqueue_job(create_shared_job_func<F, P, Ps ...>(std::forward<F>(func), provider, providers...), prerequisites);
-		}
-
-		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
-		template<typename F, typename P, typename ... Ps>
-			requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_job(F&& func, const P& provider, const Ps& ... providers, std::shared_ptr<detail::prerequisite_base> prerequisite)
-		{
-			return enqueue_job(create_shared_job_func<F, P ...>(std::forward<F>(func), provider, providers...), std::move(prerequisite));
+			return enqueue_job(create_data_job_func<F, Ps ...>(std::forward<F>(func), providers...), std::forward<Pr>(prerequisite));
 		}
 		
 #pragma region impl_helpers
@@ -219,51 +145,20 @@ namespace spool
 			requires std::invocable<F, range_underlying<R>&>
 		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work)
 		{
-			std::vector<std::shared_ptr<job>> jobs;
-			for (const auto& chunk : detail::split_range(range, worker_threads.size()))
-			{
-				jobs.emplace_back(enqueue_job([=]() {
-					for (auto& elem : chunk)
-					{
-						work(elem);
-					}
+			return std::vector<std::shared_ptr<job>>(std::ranges::transform(chunks, [&](auto& chunk)
+				{
+					return enqueue_job([=]() {std::ranges::for_each(chunk, work); });
 				}));
-			}
-			return jobs;
 		}
 
-		template<std::ranges::forward_range R, std::copy_constructible F, job_range J>
+		template<std::ranges::forward_range R, std::copy_constructible F, usable_prerequisite P>
 			requires std::invocable<F, range_underlying<R>&>
-		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work, J prerequisites)
+		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work, P prerequisite)
 		{
-			std::vector<std::shared_ptr<job>> jobs;
-			for (const auto& chunk : detail::split_range(range, worker_threads.size()))
-			{
-				jobs.emplace_back(enqueue_job([=]() {
-					for (auto& elem : chunk)
-					{
-						work(elem);
-					}
-				}), prerequisites);
-			}
-			return jobs;
-		}
-
-		template<std::ranges::forward_range R, std::copy_constructible F>
-			requires std::invocable<F, range_underlying<R>&>
-		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work, std::shared_ptr<job> prerequisite)
-		{
-			std::vector<std::shared_ptr<job>> jobs;
-			for (const auto& chunk : detail::split_range(range, worker_threads.size()))
-			{
-				jobs.emplace_back(enqueue_job([=]() {
-					for (auto elem : chunk)
-					{
-						work(elem);
-					}
-				}), prerequisite);
-			}
-			return jobs;
+			return std::vector<std::shared_ptr<job>>(std::ranges::transform(chunks, [&](auto& chunk)
+				{
+					return enqueue_job([=]() {std::ranges::for_each(chunk, work); }, prerequisite);
+				}));
 		}
 #pragma endregion impl_helpers
 
@@ -300,20 +195,16 @@ namespace spool
 			detail::WorkStealingQueue<std::shared_ptr<job>> work_queue;
 			std::thread thread;
 			std::shared_ptr<job> active_job;
-			int worker_index;
+			size_t worker_index;
 
 			void run(thread_pool* pool);
 		};
 
-		template<typename T>
-		static T& extract(const std::shared_ptr<job_data<T>>& data)
-		{
-			return data->data;
-		}
+		
 
-		std::shared_ptr<job> next_job(int worker_index)
+		std::shared_ptr<job> next_job(size_t worker_index)
 		{
-			std::optional<std::shared_ptr<job>> immediate_job = worker_threads[worker_index].work_queue.pop();
+			const std::optional<std::shared_ptr<job>> immediate_job = worker_threads[worker_index].work_queue.pop();
 			if (immediate_job.has_value())
 			{
 				return immediate_job.value();
@@ -328,7 +219,7 @@ namespace spool
 			}
 
 			//try to steal from other queues, going "left"
-			int steal_index = worker_index;
+			size_t steal_index = worker_index;
 			while (steal_index != worker_index)
 			{
 				steal_index--;
@@ -339,133 +230,6 @@ namespace spool
 			}
 			return nullptr;
 		}
-
-		template<std::ranges::forward_range R>
-		std::vector<std::shared_ptr<job>> create_jobs(R& range, std::function<void(range_underlying<R>&)> work)
-		{
-			std::vector<std::shared_ptr<job>> jobs;
-			int stride = worker_threads.size();
-			for (int offset = 0; offset < stride; offset++)
-			{
-				jobs.emplace_back(new job([=, &range]()
-					{
-						for (auto it = range.begin() + offset; it < range.end(); it += stride)
-						{
-							work(*it);
-						}
-					}));
-			}
-		}
-
-		template<typename T, typename F>
-			requires std::invocable<F, T&>
-		static std::function<void()> create_shared_job_func(F&& func, std::shared_ptr<job_data<T>> data)
-		{
-			if constexpr(std::is_rvalue_reference_v<F&&>)
-			{
-				//move it in
-				return [data = std::move(data), f = std::move(func)](){f(extract(data)); };
-			}
-			else
-			{
-				//copy as normal
-				return [=, data = std::move(data)]() {func(extract(data)); };
-			}
-		}
-
-		template<typename F, typename ... Hs>
-		static bool run_with_handles(const F& func, const Hs& ... handles)
-		{
-			std::array<bool, sizeof...(Hs)> has { handles.has()... };
-			if (std::ranges::find(has, false) == has.end())
-			{
-				//all handles offer the desired type
-				func(handles.get()...);
-				return true;
-			}
-			else
-			{
-				return false;
-			}
-		}
-
-		template<typename F, typename ... Ps>
-		static bool run_with_providers(F& func, Ps& ... providers)
-		{
-			return run_with_handles(func, providers.get()...);
-		}
-		
-		template<typename F, typename ... Ps>
-			requires std::invocable<F, provider_underlying_type<Ps...>&>
-		static std::function<bool()> create_shared_job_func(F&& func, Ps&&... providers)
-		{
-			return[func = std::forward<F>(func), ... providers = std::forward<Ps>(providers)]()
-			{
-				return run_with_providers(func, providers...);
-			};
-		}
-
-		/* old recursive approach, remove once new approach is tested
-		
-		template<typename F, typename P>
-		requires std::invocable<F, provider_underlying_type<P>&>
-		static std::function<bool()> create_shared_job_func(F&& func, const P& provider)
-		{
-			//base case
-			return[f = std::forward<F>(func), provider]()
-			{
-				auto handle = provider.get();
-				if (handle.has())
-				{
-					if constexpr (std::is_same_v<std::invoke_result_t<F, provider_underlying_type<P>&>, bool>)
-					{
-						return f(handle.get());
-					}
-					else
-					{
-						f(handle.get());
-						return true;
-					}
-				}
-				else
-				{
-					return false;
-				}
-			};
-		}
-
-		
-
-		template<typename F, typename P, typename P2, typename ... Ps>
-		requires std::invocable<F, provider_underlying_type<P>&, provider_underlying_type<P2>&, provider_underlying_type<Ps...>&>
-		static std::function<bool()> create_shared_job_func(F&& func, const P& provider, const P2& provider2, const Ps& ... providers)
-		{
-
-			std::function<bool(provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ...)> next_func =
-				[f = std::forward<F>(func), provider](provider_underlying_type<P2>& param2, provider_underlying_type<Ps>& ... params)
-			{
-				auto handle = provider.get();
-				if (handle.has())
-				{
-					if constexpr (std::is_same_v<std::invoke_result_t<F, provider_underlying_type<P>&, provider_underlying_type<P2>&, provider_underlying_type<Ps...>&>, bool>)
-					{
-						return f(handle.get(), param2, params ...);
-					}
-					else
-					{
-						f(handle.get(), param2, params ...);
-						return true;
-					}
-				}
-				else
-				{
-					return false;
-				}
-			};
-			return create_shared_job_func(next_func, provider2, providers ...);
-		}
-
-		*/
 
 		void enqueue_job(const std::shared_ptr<job>& new_job)
 		{
@@ -479,7 +243,7 @@ namespace spool
 			}
 		}
 
-		static void run_worker(thread_pool* pool, int worker_index)
+		static void run_worker(thread_pool* pool, size_t worker_index)
 		{
 			pool->worker_threads[worker_index].run(pool);
 		}
@@ -488,7 +252,7 @@ namespace spool
 		std::deque<worker> worker_threads;
 		std::atomic_flag exiting;
 
-		inline static thread_local detail::thread_context context = { nullptr, -1 };
+		inline static thread_local detail::thread_context context = { nullptr, SIZE_MAX };
 	};
 
 	execution_context spool::thread_pool::get_execution_context()

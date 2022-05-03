@@ -1,15 +1,26 @@
 #pragma once
 #include <concepts>
+#include <memory>
 #include "prerequisite.h"
 
 namespace spool
 {
+	template<typename T>
+	class job_data;
+
+	namespace detail
+	{
+		template<typename T>
+		T& extract(const std::shared_ptr<job_data<T>>&);
+	}
+
 	template <typename T>
 	class job_data final : public spool::detail::prerequisite_base
 	{
 	public:
 		friend thread_pool;
-		template<T>
+		friend T& detail::extract<T>(const std::shared_ptr<job_data<T>>&);
+
 		job_data()
 			:data()
 		{}
@@ -20,23 +31,31 @@ namespace spool
 		{
 
 		}
-
+		
 		void submit(const T& value)
 		{
-			data = value;
-			assigned.test_and_set();
+			if (!assigned.test_and_set())
+			{
+				data = value;
+			}
 		}
 
 		void submit(T&& value)
 		{
-			data = std::move(value);
-			assigned.test_and_set();
+			if (!assigned.test_and_set())
+			{
+				data = std::move(value);
+			}
 		}
 
-		void submit(const std::function<void(T&)>& mutator)
+		template <typename F>
+		requires std::invocable<F, T&>
+		void submit(const F& mutator)
 		{
-			mutator(data);
-			assigned.test_and_set();
+			if (!assigned.test_and_set())
+			{
+				mutator(data);
+			}
 		}
 
 		bool is_done() override
@@ -44,9 +63,17 @@ namespace spool
 			return assigned.test();
 		}
 
-
 	private:
 		T data;
 		std::atomic_flag assigned;
 	};
+
+	namespace detail
+	{
+		template<typename T>
+		T& extract(const std::shared_ptr<job_data<T>>& data)
+		{
+			return data->data;
+		}
+	}
 }

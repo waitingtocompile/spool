@@ -6,6 +6,7 @@ add_library(spool spool.h
     concepts.h
     prerequisite.h
     job_data.h
+    job_utils.h
     shared_resource.h
     wsq.h
     MPMCQueue.h)

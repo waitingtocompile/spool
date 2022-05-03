@@ -47,6 +47,8 @@ TEST(spool_test, RespectsSequencing)
 	}
 	pool.exit();
 	ASSERT_FALSE(violated.test()) << "Job ran before prerequisite";
+
+	//TODO: test the multi-dependancy overload as well
 }
 
 TEST(spool_test, LoadBalances)
@@ -94,7 +96,7 @@ TEST(spool_test, LoadBalances)
 	for (auto& elem : map)
 	{
 		ASSERT_LT(elem.second, ids.size() * 0.8f) << "Over 80% of work is done on a single thread, load is not being properly balanced.";
-		ASSERT_LT(elem.second, ids.size() / 2) << "Over 50% of work is being done on a single thread. Load may not be properly balanced.";
+		ASSERT_LT(elem.second, ids.size() / 2) << "Over 50% of work is being done on a single thread, load may not be properly balanced.";
 	}
 }
 
@@ -163,13 +165,14 @@ TEST(spool_test, ParallelFor)
 		//all should be 1
 		ASSERT_EQ(b.i, 1) << "One or more elements in parallel for-each was not altered or was altered incorrectly";
 	}
+	//TODO: also test the other overloads
 }
 
 TEST(spool_test, DataJob)
 {
 	spool::thread_pool pool;
 	
-	auto job = pool.enqueue_job<int*>([&](int* ix) {if (*ix == 1)*ix = 2; else *ix = 3; });
+	auto job = pool.enqueue_data_job<int*>([&](int* ix) {if (*ix == 1)*ix = 2; else *ix = 3; });
 	int i = 1;
 	ASSERT_FALSE(job.job->is_done()) << "Ran job before data submission";
 	job.data_handle->submit(&i);
@@ -180,10 +183,12 @@ TEST(spool_test, DataJob)
 	ASSERT_NE(i, 1) << "work did not occur or changes were not applied to target container";
 	ASSERT_NE(i, 3) << "data was in an invalid state when work occurred";
 	ASSERT_EQ(i, 2) << "work was done wrongly in an unexpected way";
+	//todo::also test the overloads
 }
 
 TEST(spool_test, SharedResourceJob)
 {
 	spool::thread_pool pool;
 	spool::shared_resource<int> num;
+	//TODO: an actual test
 }
