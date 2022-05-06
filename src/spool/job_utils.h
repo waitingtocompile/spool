@@ -6,7 +6,6 @@
 
 #include "job.h"
 #include "concepts.h"
-#include "job_data.h"
 
 namespace spool::detail
 {
@@ -42,13 +41,6 @@ namespace spool::detail
 		return views;
 	}
 	
-	template<typename F, typename T>
-	requires std::invocable<F, T&>
-	std::function<void()> create_data_job_func(F&& func, std::shared_ptr<job_data<T>> data)
-	{
-		return[func = std::forward<F>(func), data = std::move(data)](){func(extract(data)); };
-	}
-
 	template<typename F, typename ... Hs>
 	requires std::invocable<F, handle_underlying_type<Hs...>&>
 	bool run_with_handles(const F& func, const Hs& ... handles)

@@ -14,6 +14,13 @@ namespace spool
 		class prerequisite_base;
 	}
 
+	template<typename P, typename T>
+	concept dereferences_to = (std::is_pointer_v<P> && std::convertible_to<P, T*>) || requires (P p)
+	{
+		{*p} -> std::convertible_to<T&>;
+		{p.operator->()} -> std::convertible_to<T*>;
+	};
+
 	template<std::ranges::range R>
 	using range_underlying = std::iter_value_t<std::ranges::iterator_t<R>>;
 
@@ -50,25 +57,19 @@ namespace spool
 	template<typename P>
 	using provider_underlying_type = handle_underlying_type<offered_handle_type<P>>;
 
-	template<typename From, typename To>
-	concept dereferenceable_to = requires(From f)
-	{
-		{*f} -> std::convertible_to<To&>;
-	};
-
 	template<typename F, typename ... Ps>
 	concept takes_shared_providers = std::invocable<F, provider_underlying_type<Ps...>> &&
 		(... && shared_resource_provider<Ps, provider_underlying_type<Ps>>);
 
-	template <typename T, typename R>
-	concept can_provide_read = requires(R r)
+	template <typename R, typename T>
+	concept provides_read_handle = requires(R r)
 	{
 		{r.create_read_handle()} -> shared_resource_handle<const T>;
 		
 	};
 
-	template<typename T, typename R>
-	concept can_provide_write = requires(R r)
+	template<typename R, typename T>
+	concept provides_write_handle = requires(R r)
 	{
 		{r.create_write_handle()} -> shared_resource_handle<T>;
 	};

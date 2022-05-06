@@ -175,7 +175,7 @@ TEST(spool_test, DataJob)
 	auto job = pool.enqueue_data_job<int*>([&](int* ix) {if (*ix == 1)*ix = 2; else *ix = 3; });
 	int i = 1;
 	ASSERT_FALSE(job.job->is_done()) << "Ran job before data submission";
-	job.data_handle->submit(&i);
+	job.data->submit(&i);
 	while (!job.job->is_done())
 	{
 	}
@@ -199,3 +199,5 @@ TEST(spool_test, SharedResourceJob)
 	ASSERT_EQ(static_cast<int>(num), 1) << "shared resource wasn't altered";
 
 	//TODO: test access control
+}
+

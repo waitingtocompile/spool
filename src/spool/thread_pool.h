@@ -11,8 +11,8 @@
 #include "wsq.h"
 #include "MPMCQueue.h"
 #include "job.h"
-#include "job_data.h"
 #include "job_utils.h"
+#include "input_data.h"
 
 #ifndef __cpp_lib_ranges
 #error "Spool requires a complete (or near complete) ranges implementation, check your compiler settings"
@@ -40,10 +40,10 @@ namespace spool
 	};
 
 	template<typename T>
-	struct data_job final
+	struct [[nodiscard]] data_job final
 	{
-		const std::shared_ptr<job> job;
-		const std::shared_ptr<job_data<T>> data_handle;
+		std::shared_ptr<job> job;
+		std::shared_ptr<input_data<T>> data;
 	};
 
 	class thread_pool final
@@ -98,26 +98,21 @@ namespace spool
 
 		template<typename T, typename F>
 			requires std::invocable<F, T&>
-		data_job<T> enqueue_data_job(F&& work, std::shared_ptr<job_data<T>> data = std::make_shared<job_data<T>>())
+		data_job<T> enqueue_data_job(F&& work)
 		{
-			return { enqueue_job(detail::create_data_job_func(std::forward<F>(work), data), data), std::move(data)};
+			std::shared_ptr<input_data<T>> data = std::make_shared<input_data<T>>();
+			auto job = enqueue_shared_resource_job(std::forward<F>(work), read_provider<T, input_data<T>, std::shared_ptr<input_data<T>>>(data));
+			return {job, data};
 		}
 		
 		template<typename T, typename F, usable_prerequisite P>
 			requires std::invocable<F, T&>
 		data_job<T> enqueue_data_job(F&& work, P&& prerequisite)
 		{
-			return enqueue_data_job(std::forward<F>(work), std::make_shared<job_data<T>>(), std::forward(prerequisite));
-		}
 
-		template<typename T, typename F, usable_prerequisite P>
-			requires std::invocable<F, T&>
-		data_job<T> enqueue_data_job(F&& work, std::shared_ptr<job_data<T>> data, P&& prerequisite)
-		{
-			const std::shared_ptr<job> pjob(new job(detail::create_data_job_func(std::forward<F>(work), data), std::forward<P>(prerequisite)));
-			pjob->add_prerequisite(data);
-			enqueue_job(pjob);
-			return { std::move(pjob), std::move(data) };
+			std::shared_ptr<input_data<T>> data = std::make_shared<input_data<T>>();
+			auto job = enqueue_shared_resource_job(std::forward<F>(work), read_provider<T, input_data<T>, std::shared_ptr<input_data<T>>>(data));
+			return { job, data };
 		}
 		
 #pragma endregion data_job

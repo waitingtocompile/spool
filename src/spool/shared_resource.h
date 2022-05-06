@@ -4,12 +4,12 @@
 
 namespace spool
 {
-	template<typename T, typename R>
-	requires can_provide_read<T, R>
+	template<typename T, typename R, typename Rp = R*>
+	requires provides_read_handle<R, T> && dereferences_to<Rp, R>
 	class read_provider final
 	{
 	public:
-		read_provider(R* resource)
+		read_provider(Rp resource)
 			:resource(resource)
 		{}
 
@@ -24,15 +24,15 @@ namespace spool
 		}
 
 	private:
-		R* resource;
+		Rp resource;
 	};
 
-	template<typename T, typename R>
-		requires can_provide_write<T, R>
+	template<typename T, typename R, typename Rp = R*>
+	requires provides_write_handle<R, T> && dereferences_to<Rp, R>
 	class write_provider final
 	{
 	public:
-		write_provider(R* resource)
+		write_provider(Rp resource)
 			:resource(resource)
 		{}
 
@@ -47,18 +47,40 @@ namespace spool
 		}
 
 	private:
-		R* resource;
+		Rp resource;
 	};
 
-	template<typename R, typename T, T& fetch(R&), void del(R&)>
+	template<typename T>
 	class simple_handle final
 	{
 	public:
-		explicit simple_handle(R* resource = nullptr)
+		explicit simple_handle(T* p_data)
+			:data(p_data)
+		{}
+
+		bool has() const
+		{
+			return data;
+		}
+
+		T& get() const
+		{
+			return *data;
+		}
+
+	private:
+		T* data;
+	};
+
+	template<typename R, typename T, T& fetch(R&), void del(R&) = [](){} >
+	class flexible_handle final
+	{
+	public:
+		explicit flexible_handle(R* resource = nullptr)
 			:resource(resource)
 		{}
 
-		simple_handle(const simple_handle&) = delete;
+		flexible_handle(const flexible_handle&) = delete;
 
 		bool has() const
 		{
@@ -70,7 +92,7 @@ namespace spool
 			return fetch(*resource);
 		}
 
-		~simple_handle()
+		~flexible_handle()
 		{
 			if (resource != nullptr)
 			{
@@ -101,67 +123,6 @@ namespace spool
 		{
 			return data;
 		}
-
-		
-
-		/*
-		struct read_handle final
-		{
-		public:
-			read_handle(shared_resource* source)
-				:source(source)
-			{}
-
-			read_handle(const read_handle& other) = delete;
-
-			bool has() const
-			{
-				return source != nullptr;
-			}
-
-			const T& get() const
-			{
-				return source->data;
-			}
-
-			~read_handle()
-			{
-				if (source != nullptr) source->readers--;
-			}
-
-		private:
-			shared_resource* const source;
-			
-		};
-		
-
-		struct write_handle final
-		{
-			write_handle(shared_resource<T>* source)
-				:source(source)
-			{}
-
-			write_handle(const write_handle& other) = delete;
-
-			bool has() const
-			{
-				return source != nullptr;
-			}
-
-			T& get() const
-			{
-				return source->data;
-			}
-
-			~write_handle()
-			{
-				if (source != nullptr) source->writer.clear();
-			}
-
-		private:
-			shared_resource* const source;
-		};
-		*/
 
 		auto create_read_handle();
 
@@ -210,7 +171,7 @@ namespace spool
 	template<typename T>
 	auto shared_resource<T>::create_read_handle()
 	{
-		using read_handle = simple_handle <shared_resource, const T, shared_resource::fetch_const, shared_resource::release_read> ;
+		using read_handle = flexible_handle <shared_resource, const T, shared_resource::fetch_const, shared_resource::release_read> ;
 
 		readers++;
 		if (writer.test())
@@ -228,7 +189,7 @@ namespace spool
 	template<typename T>
 	auto shared_resource<T>::create_write_handle()
 	{
-		using write_handle = simple_handle<shared_resource,	T, shared_resource::fetch, shared_resource::release_write>;
+		using write_handle = flexible_handle<shared_resource,	T, shared_resource::fetch, shared_resource::release_write>;
 
 		if (writer.test_and_set())
 		{
