@@ -127,9 +127,9 @@ namespace spool
 		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
 		template<typename F, typename ... Ps>
 			requires std::invocable<F, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, const Ps&& ... providers)
+		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, Ps&& ... providers)
 		{
-			return enqueue_job(create_data_job_func<F, Ps ...>(std::forward<F>(func), providers...));
+			return enqueue_job(detail::create_shared_resource_job_func<F, Ps ...>(std::forward<F>(func), std::forward<Ps>(providers)...));
 		}
 
 		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
@@ -137,7 +137,7 @@ namespace spool
 			requires std::invocable<F, provider_underlying_type<Ps>& ...>
 		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, const Ps& ... providers, Pr&& prerequisite)
 		{
-			return enqueue_job(create_data_job_func<F, Ps ...>(std::forward<F>(func), providers...), std::forward<Pr>(prerequisite));
+			return enqueue_job(detail::create_shared_resource_job_func<F, Ps ...>(std::forward<F>(func), std::forward<Ps>(providers)...), std::forward<Pr>(prerequisite));
 		}
 		
 #pragma region impl_helpers
@@ -145,20 +145,21 @@ namespace spool
 			requires std::invocable<F, range_underlying<R>&>
 		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work)
 		{
-			return std::vector<std::shared_ptr<job>>(std::ranges::transform(chunks, [&](auto& chunk)
-				{
-					return enqueue_job([=]() {std::ranges::for_each(chunk, work); });
-				}));
+			const auto chunks = detail::split_range(range, worker_threads.size());
+			std::vector<std::shared_ptr<job>> jobs;
+			std::ranges::for_each(chunks, [&](auto& chunk) {jobs.emplace_back(enqueue_job([=]() {std::ranges::for_each(chunk, work); })); });
+			return jobs;
+
 		}
 
 		template<std::ranges::forward_range R, std::copy_constructible F, usable_prerequisite P>
 			requires std::invocable<F, range_underlying<R>&>
-		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work, P prerequisite)
+		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work, const P& prerequisite)
 		{
-			return std::vector<std::shared_ptr<job>>(std::ranges::transform(chunks, [&](auto& chunk)
-				{
-					return enqueue_job([=]() {std::ranges::for_each(chunk, work); }, prerequisite);
-				}));
+			const auto chunks = detail::split_range(range, worker_threads.size());
+			std::vector<std::shared_ptr<job>> jobs;
+			std::ranges::for_each(chunks, [&](auto& chunk) {jobs.emplace_back(enqueue_job([=]() {std::ranges::for_each(chunk, work); }, prerequisite)); });
+			return jobs;
 		}
 #pragma endregion impl_helpers
 

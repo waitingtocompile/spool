@@ -190,5 +190,12 @@ TEST(spool_test, SharedResourceJob)
 {
 	spool::thread_pool pool;
 	spool::shared_resource<int> num;
-	//TODO: an actual test
-}
+
+	auto job = pool.enqueue_shared_resource_job([](int& i) {i++; }, num.create_write_provider());
+	while (!job->is_done())
+	{
+	}
+
+	ASSERT_EQ(static_cast<int>(num), 1) << "shared resource wasn't altered";
+
+	//TODO: test access control

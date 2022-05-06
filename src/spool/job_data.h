@@ -26,25 +26,26 @@ namespace spool
 		{}
 
 		template<typename ... Args>
+		requires std::constructible_from<T, Args...>
 		job_data(Args&& ... args)
 			:data(std::forward<Args>(args) ...)
-		{
-
-		}
+		{}
 		
 		void submit(const T& value)
 		{
-			if (!assigned.test_and_set())
+			if (!assign_started.test_and_set())
 			{
 				data = value;
+				assign_finished.test_and_set();
 			}
 		}
 
 		void submit(T&& value)
 		{
-			if (!assigned.test_and_set())
+			if (!assign_started.test_and_set())
 			{
 				data = std::move(value);
+				assign_finished.test_and_set();
 			}
 		}
 
@@ -52,20 +53,22 @@ namespace spool
 		requires std::invocable<F, T&>
 		void submit(const F& mutator)
 		{
-			if (!assigned.test_and_set())
+			if (!assign_started.test_and_set())
 			{
 				mutator(data);
+				assign_finished.test_and_set();
 			}
 		}
 
 		bool is_done() override
 		{
-			return assigned.test();
+			return assign_finished.test();
 		}
 
 	private:
 		T data;
-		std::atomic_flag assigned;
+		std::atomic_flag assign_started;
+		std::atomic_flag assign_finished;
 	};
 
 	namespace detail

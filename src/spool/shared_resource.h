@@ -24,7 +24,7 @@ namespace spool
 		}
 
 	private:
-		R* const resource;
+		R* resource;
 	};
 
 	template<typename T, typename R>
@@ -47,7 +47,39 @@ namespace spool
 		}
 
 	private:
-		R* const resource;
+		R* resource;
+	};
+
+	template<typename R, typename T, T& fetch(R&), void del(R&)>
+	class simple_handle final
+	{
+	public:
+		explicit simple_handle(R* resource = nullptr)
+			:resource(resource)
+		{}
+
+		simple_handle(const simple_handle&) = delete;
+
+		bool has() const
+		{
+			return resource != nullptr;
+		}
+
+		T& get() const
+		{
+			return fetch(*resource);
+		}
+
+		~simple_handle()
+		{
+			if (resource != nullptr)
+			{
+				del(*resource);
+			}
+		}
+
+	private:
+		R* resource;
 	};
 
 	//a simple shared resource wrapper, that allows for any number of readers and one writer
@@ -65,6 +97,14 @@ namespace spool
 			return data;
 		}
 
+		T& get()
+		{
+			return data;
+		}
+
+		
+
+		/*
 		struct read_handle final
 		{
 		public:
@@ -93,6 +133,7 @@ namespace spool
 			shared_resource* const source;
 			
 		};
+		
 
 		struct write_handle final
 		{
@@ -120,54 +161,89 @@ namespace spool
 		private:
 			shared_resource* const source;
 		};
+		*/
 
-		auto create_read_handle()
-		{
-			readers++;
-			if (writer.test())
-			{
-				//there is a writer active, reset our read hold and return nothing
-				readers--;
-				return read_handle(nullptr);
-			}
-			else
-			{
-				return read_handle(this);
-			}
-		}
+		auto create_read_handle();
 
-		auto create_write_handle()
-		{
-			if (writer.test_and_set())
-			{
-				//there's another writer active, do nothing
-				return write_handle(nullptr);
-			}
-			else if (readers > 0)
-			{
-				//there's at least one active reader, release our write hold and do nothing
-				writer.clear();
-				return write_handle(nullptr);
-			}
-			else
-			{
-				return write_handle(this);
-			}
-		}
+		auto create_write_handle();
+		
 
 		auto create_read_provider()
 		{
-			return read_provider<T, shared_resource<T>>(this);
+			return read_provider<T, shared_resource>(this);
 		}
 
 		auto create_write_provider()
 		{
-			return write_provider<T, shared_resource<T>>(this);
+			return write_provider<T, shared_resource>(this);
 		}
 
 	private:
 		T data;
 		std::atomic_int readers;
 		std::atomic_flag writer;
+
+
+		//these exist to satisfy the constexpr-ness constraints of template parameters
+
+		static T& fetch(shared_resource& res)
+		{
+			return res.data;
+		}
+
+		static const T& fetch_const(shared_resource& res)
+		{
+			return res.data;
+		}
+
+		static void release_read(shared_resource& res)
+		{
+			res.readers--;
+		}
+
+		static void release_write(shared_resource& res)
+		{
+			res.writer.clear();
+		}
 	};
+
+	template<typename T>
+	auto shared_resource<T>::create_read_handle()
+	{
+		using read_handle = simple_handle <shared_resource, const T, shared_resource::fetch_const, shared_resource::release_read> ;
+
+		readers++;
+		if (writer.test())
+		{
+			//there is a writer active, reset our read hold and return nothing
+			readers--;
+			return read_handle(nullptr);
+		}
+		else
+		{
+			return read_handle(this);
+		}
+	}
+
+	template<typename T>
+	auto shared_resource<T>::create_write_handle()
+	{
+		using write_handle = simple_handle<shared_resource,	T, shared_resource::fetch, shared_resource::release_write>;
+
+		if (writer.test_and_set())
+		{
+			//there's another writer active, do nothing
+			return write_handle (nullptr);
+		}
+		else if (readers > 0)
+		{
+			//there's at least one active reader, release our write hold and do nothing
+			writer.clear();
+			return write_handle(nullptr);
+		}
+		else
+		{
+			return write_handle(this);
+		}
+	}
 }

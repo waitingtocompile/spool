@@ -41,13 +41,6 @@ namespace spool::detail
 		}
 		return views;
 	}
-
-	template<std::copyable F, std::ranges::forward_range R>
-	requires std::invocable<F, range_underlying<R>>
-	std::vector<std::shared_ptr<job>> subdivide_job(const F& work, const R& range, unsigned int subdivide_count)
-	{
-		return std::vector<std::shared_ptr<job>>(std::ranges::transform(split_range(range, subdivide_count), [=](auto& chunk))
-	}
 	
 	template<typename F, typename T>
 	requires std::invocable<F, T&>
@@ -82,15 +75,13 @@ namespace spool::detail
 
 	template<typename F, typename ... Ps>
 	requires std::invocable<F, provider_underlying_type<Ps...>&>
-	std::function<bool()> create_data_job_func(F&& func, Ps&&... providers)
+	std::function<bool()> create_shared_resource_job_func(F&& func, Ps&&... providers)
 	{
 		return[func = std::forward<F>(func), ... providers = std::forward<Ps>(providers)]()
 		{
 			return run_with_providers(func, providers...);
 		};
 	}
-
-	
 
 	/* old recursive approach, remove once new approach is tested
 
