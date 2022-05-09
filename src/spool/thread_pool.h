@@ -109,7 +109,6 @@ namespace spool
 			requires std::invocable<F, T&>
 		data_job<T> enqueue_data_job(F&& work, P&& prerequisite)
 		{
-
 			std::shared_ptr<input_data<T>> data = std::make_shared<input_data<T>>();
 			auto job = enqueue_shared_resource_job(std::forward<F>(work), read_provider<T, input_data<T>, std::shared_ptr<input_data<T>>>(data));
 			return { job, data };
@@ -119,7 +118,6 @@ namespace spool
 
 #pragma region shared_resource_job
 
-		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
 		template<typename F, typename ... Ps>
 			requires std::invocable<F, provider_underlying_type<Ps>& ...>
 		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, Ps&& ... providers)
@@ -127,10 +125,9 @@ namespace spool
 			return enqueue_job(detail::create_shared_resource_job_func<F, Ps ...>(std::forward<F>(func), std::forward<Ps>(providers)...));
 		}
 
-		//note that providers will be copied as part of this process. This is done to facilitate disposable providers
 		template<typename F, typename ... Ps, usable_prerequisite Pr>
 			requires std::invocable<F, provider_underlying_type<Ps>& ...>
-		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, const Ps& ... providers, Pr&& prerequisite)
+		std::shared_ptr<job> enqueue_shared_resource_job(F&& func, Pr&& prerequisite, Ps&& ... providers)
 		{
 			return enqueue_job(detail::create_shared_resource_job_func<F, Ps ...>(std::forward<F>(func), std::forward<Ps>(providers)...), std::forward<Pr>(prerequisite));
 		}
@@ -149,7 +146,7 @@ namespace spool
 
 		template<std::ranges::forward_range R, std::copy_constructible F, usable_prerequisite P>
 			requires std::invocable<F, range_underlying<R>&>
-		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work, const P& prerequisite)
+		std::vector<std::shared_ptr<job>> for_each(R& range, const P& prerequisite, const F& work)
 		{
 			const auto chunks = detail::split_range(range, worker_threads.size());
 			std::vector<std::shared_ptr<job>> jobs;

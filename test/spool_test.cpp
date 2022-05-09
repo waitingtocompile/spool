@@ -47,8 +47,6 @@ TEST(spool_test, RespectsSequencing)
 	}
 	pool.exit();
 	ASSERT_FALSE(violated.test()) << "Job ran before prerequisite";
-
-	//TODO: test the multi-dependancy overload as well
 }
 
 TEST(spool_test, LoadBalances)
@@ -165,7 +163,6 @@ TEST(spool_test, ParallelFor)
 		//all should be 1
 		ASSERT_EQ(b.i, 1) << "One or more elements in parallel for-each was not altered or was altered incorrectly";
 	}
-	//TODO: also test the other overloads
 }
 
 TEST(spool_test, DataJob)
@@ -183,8 +180,18 @@ TEST(spool_test, DataJob)
 	ASSERT_NE(i, 1) << "work did not occur or changes were not applied to target container";
 	ASSERT_NE(i, 3) << "data was in an invalid state when work occurred";
 	ASSERT_EQ(i, 2) << "work was done wrongly in an unexpected way";
-	//todo::also test the overloads
 }
+
+struct manualResourceHandle
+{
+	int data = 0;
+	std::atomic_flag allowAccess;
+	
+	auto create_write_handle()
+	{
+		return spool::simple_handle<int>(allowAccess.test()?(&data):nullptr);
+	}
+};
 
 TEST(spool_test, SharedResourceJob)
 {
@@ -198,6 +205,57 @@ TEST(spool_test, SharedResourceJob)
 
 	ASSERT_EQ(static_cast<int>(num), 1) << "shared resource wasn't altered";
 
-	//TODO: test access control
+
+	//test that it respects resource overlap rules
+	manualResourceHandle manualResource;
+
+	job = pool.enqueue_shared_resource_job([](int& i) {i++; }, spool::write_provider<int, manualResourceHandle>(&manualResource));
+
+	std::this_thread::sleep_for(std::chrono::seconds(2));
+
+	ASSERT_EQ(manualResource.data, 0) << "shared resource job ran when access to job was forbidden";
+
+
+	std::atomic_flag is_writing;
+	std::atomic_flag violated;
+	
+	std::vector<std::shared_ptr<spool::job>> jobs;
+	for (int i = 0; i < 5; i++)
+	{
+		//queue up five writers to compete for access, forbidden from starting for the moment
+		jobs.push_back(pool.enqueue_shared_resource_job([&](int& i)
+			{
+				if (is_writing.test_and_set())
+				{
+					violated.test_and_set();
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+				i++;
+				is_writing.clear();
+			}, job, num.create_write_provider()));
+	}
+
+	for (int i = 0; i < 20; i++)
+	{
+		//queue up twenty readers to share access and compete with the writers
+		jobs.push_back(pool.enqueue_shared_resource_job([&](const int& i)
+			{
+				if (is_writing.test())
+				{
+					violated.test_and_set();
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}, job, num.create_read_provider()));
+	}
+
+	//let all our queued readers and writers run and fight for access
+	manualResource.allowAccess.test_and_set();
+
+	auto allDone = pool.enqueue_job([]() {}, jobs);
+
+	while (!allDone->is_done() && !violated.test())
+	{}
+
+	ASSERT_FALSE(violated.test()) << "Shared resource access was violated, multiple clashing writes or a read clashed with a write";
 }
 
