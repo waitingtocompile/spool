@@ -8,7 +8,6 @@
 
 #include "MPMCQueue.h"
 #include "concepts.h"
-#include "prerequisite.h"
 
 namespace spool
 {
@@ -19,7 +18,7 @@ namespace spool
     }
     class thread_pool;
 
-    class job final : public detail::prerequisite_base
+    class job final
     {
         friend thread_pool;
     public:
@@ -33,7 +32,7 @@ namespace spool
             done.test_and_set();
         }
 
-        void add_prerequisite(std::shared_ptr<detail::prerequisite_base> other)
+        void add_prerequisite(std::shared_ptr<job> other)
         {
             if (other != nullptr && !(other->is_done()))
             {
@@ -59,12 +58,12 @@ namespace spool
         job(F && work, const R & prerequisites_range)
             : job(std::forward<F>(work))
         {
-            std::ranges::for_each(prerequisites_range, [&](std::shared_ptr<detail::prerequisite_base> j) {add_prerequisite(j); });
+            std::ranges::for_each(prerequisites_range, [&](auto j) {add_prerequisite(j); });
         }
 
         template<typename F>
             requires std::convertible_to<F, std::function<void()>> || std::convertible_to<F, std::function<bool()>>
-        job(F&& work, std::shared_ptr<detail::prerequisite_base> prerequisite)
+        job(F&& work, std::shared_ptr<job> prerequisite)
             : job(std::forward<F>(work))
         {
             add_prerequisite(prerequisite);
@@ -78,7 +77,7 @@ namespace spool
                 //skip working if it's already "done"
                 return true;
             }
-            std::shared_ptr<detail::prerequisite_base> p;
+            std::shared_ptr<job> p;
             while (prerequisites.try_pop(p))
             {
                 if (!p->is_done())
@@ -107,6 +106,6 @@ namespace spool
         std::variant<std::function<void()>, std::function<bool()>> work;
         std::atomic_flag done;
 
-        rigtorp::mpmc::Queue<std::shared_ptr<detail::prerequisite_base>> prerequisites;
+        rigtorp::mpmc::Queue<std::shared_ptr<job>> prerequisites;
     };
 }

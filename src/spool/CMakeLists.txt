@@ -4,7 +4,6 @@ add_library(spool spool.h
     thread_pool.h
     job.h
     concepts.h
-    prerequisite.h
     job_utils.h
     shared_resource.h
     input_data.h

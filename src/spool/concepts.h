@@ -9,11 +9,6 @@ namespace spool
 	class job;
 	class thread_pool;
 
-	namespace detail
-	{
-		class prerequisite_base;
-	}
-
 	template<typename P, typename T>
 	concept dereferences_to = (std::is_pointer_v<P> && std::convertible_to<P, T*>) || requires (P p)
 	{
@@ -29,10 +24,10 @@ namespace spool
 
 	template <typename R>
 	concept prerequisite_range = std::ranges::input_range<R> &&
-		std::convertible_to<range_underlying<R>, std::shared_ptr<detail::prerequisite_base>>;
+		std::convertible_to<range_underlying<R>, std::shared_ptr<job>>;
 
 	template <typename T>
-	concept usable_prerequisite = std::convertible_to<T, std::shared_ptr<detail::prerequisite_base>>
+	concept usable_prerequisite = std::convertible_to<T, std::shared_ptr<job>>
 		|| prerequisite_range<T>;
 
 	template<typename H, typename T>
