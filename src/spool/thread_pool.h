@@ -79,7 +79,7 @@ namespace spool
 		template<job_func F>
 		std::shared_ptr<job> enqueue_job(F&& work)
 		{
-			const std::shared_ptr<job> pjob(new job(std::forward<F>(work)));
+			const std::shared_ptr<job> pjob(new job(std::forward<std::function<void()>>(work)));
 			enqueue_job(pjob);
 			return pjob;
 		}
@@ -87,7 +87,7 @@ namespace spool
 		template<job_func F, usable_prerequisite P>
 		std::shared_ptr<job> enqueue_job(F&& work, P&& prerequisite)
 		{
-			const std::shared_ptr<job> pjob(new job(std::forward<F>(work), std::forward<P>(prerequisite)));
+			const std::shared_ptr<job> pjob(new job(std::forward<std::function<void()>>(work), std::forward<P>(prerequisite)));
 			enqueue_job(pjob);
 			return pjob;
 		}
