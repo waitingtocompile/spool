@@ -72,7 +72,8 @@ namespace spool
 		T* data;
 	};
 
-	template<typename R, typename T, T& fetch(R&), void del(R&) = [](){} >
+	template<typename R, typename T, auto fetch, auto del = []() {} >
+	requires std::invocable<decltype(fetch), R&>&& std::invocable<decltype(del), R&> && invoke_result<decltype(fetch), T&, R&>
 	class flexible_handle final
 	{
 	public:

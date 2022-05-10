@@ -19,6 +19,9 @@ namespace spool
 	template<std::ranges::range R>
 	using range_underlying = std::iter_value_t<std::ranges::iterator_t<R>>;
 
+	template<typename T, typename R, typename ... P>
+	concept invoke_result = std::convertible_to<std::invoke_result_t<T, P...>, R>;
+
 	template<typename F>
 	concept job_func = std::convertible_to<F, std::function<void()>>;
 
