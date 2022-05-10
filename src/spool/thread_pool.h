@@ -156,7 +156,15 @@ namespace spool
 #pragma endregion impl_helpers
 
 
-		static execution_context get_execution_context();
+		static execution_context get_execution_context()
+        {
+            if (thread_pool::context.pool != nullptr)
+            {
+                return { thread_pool::context.pool, thread_pool::context.pool->worker_threads[thread_pool::context.runner_index].active_job };
+            }
+            else return { nullptr, nullptr };
+        }
+
 
 
 		//prevent new tasks from being started by the thread pool
@@ -190,7 +198,45 @@ namespace spool
 			std::shared_ptr<job> active_job;
 			size_t worker_index;
 
-			void run(thread_pool* pool);
+			void run(thread_pool* pool)
+            {
+                std::deque<std::shared_ptr<job>> held_jobs;
+                thread_pool::context = { pool, worker_index };
+                while (!pool->exiting.test())
+                {
+                    active_job = pool->next_job(worker_index);
+                    if (active_job != nullptr)
+                    {
+                        //we actually have a job, run it
+                        if (active_job->try_run())
+                        {
+                            //job completed succesfully, offer to delete then dump all our held jobs back into the queue
+                            active_job = nullptr;
+
+                            while (!held_jobs.empty())
+                            {
+                                pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
+                                held_jobs.pop_back();
+                            }
+                        }
+                        else
+                        {
+                            //the job couldn't run, hold it
+                            held_jobs.push_back(active_job);
+                        }
+                    }
+                    else
+                    {
+                        //no job offered, dump our held jobs back
+                        while (!held_jobs.empty())
+                        {
+                            pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
+                            held_jobs.pop_back();
+                        }
+                    }
+                }
+            }
+
 		};
 
 		
@@ -248,52 +294,4 @@ namespace spool
 		inline static thread_local detail::thread_context context = { nullptr, SIZE_MAX };
 	};
 
-	execution_context spool::thread_pool::get_execution_context()
-	{
-		if (thread_pool::context.pool != nullptr)
-		{
-			return { thread_pool::context.pool, thread_pool::context.pool->worker_threads[thread_pool::context.runner_index].active_job };
-		}
-		else return { nullptr, nullptr };
-	}
-
-	void thread_pool::worker::run(thread_pool* pool)
-	{
-		std::deque<std::shared_ptr<job>> held_jobs;
-		thread_pool::context = { pool, worker_index };
-		while (!pool->exiting.test())
-		{
-			active_job = pool->next_job(worker_index);
-			if (active_job != nullptr)
-			{
-				//we actually have a job, run it
-				if (active_job->try_run())
-				{
-					//job completed succesfully, offer to delete then dump all our held jobs back into the queue
-					active_job = nullptr;
-
-					while (!held_jobs.empty())
-					{
-						pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
-						held_jobs.pop_back();
-					}
-				}
-				else
-				{
-					//the job couldn't run, hold it
-					held_jobs.push_back(active_job);
-				}
-			}
-			else
-			{
-				//no job offered, dump our held jobs back
-				while (!held_jobs.empty())
-				{
-					pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
-					held_jobs.pop_back();
-				}
-			}
-		}
-	}
-	
 }
