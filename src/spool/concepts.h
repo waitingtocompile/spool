@@ -56,7 +56,7 @@ namespace spool
 	using provider_underlying_type = handle_underlying_type<offered_handle_type<P>>;
 
 	template<typename F, typename ... Ps>
-	concept takes_shared_providers = std::invocable<F, provider_underlying_type<Ps...>> &&
+	concept takes_shared_providers = std::invocable<F, provider_underlying_type<Ps>&...> &&
 		(... && shared_resource_provider<Ps, provider_underlying_type<Ps>>);
 
 	template <typename R, typename T>
