@@ -24,3 +24,4 @@ out/
 # cmake intermediates
 CmakeCache.txt
 CMakeFiles/
+*.cmake
