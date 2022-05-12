@@ -32,8 +32,11 @@ Finally, jobs can be assigned as prerequisites of other jobs
 auto first = pool.enqueue_job(myFunction);
 auto second = pool.enqueue_job(myDependantFunction, first);
 
-//assign many prerequisites by passing a ranges
-pool.enqueue_job(myOtherDependantFunction, myRangeOfManyJobs);
+//assign many prerequisites by passing a range
+auto third = pool.enqueue_job(myOtherDependantFunction, myRangeOfManyJobs);
+
+//jobs can even have extra dependancies assigned after they're created so long as they haven't started execution yet
+third->add_prerequisite(second);
 ```
 
 ### On MSVC
