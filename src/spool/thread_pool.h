@@ -257,16 +257,17 @@ namespace spool
 				return assigned_job;
 			}
 
-			//try to steal from other queues, going "left"
+			//try to steal from other queues, going "right"
 			size_t steal_index = worker_index;
-			while (steal_index != worker_index)
-			{
-				steal_index--;
+			do
+            {
+				steal_index++;
 				//if we've wrapped around, reset back
-				if (steal_index < 0) steal_index = worker_threads.size() - 1;
+				if (steal_index >= worker_threads.size()) steal_index = 0;
 				std::optional<std::shared_ptr<job>> stolen_job = worker_threads[steal_index].work_queue.steal();
 				if (stolen_job.has_value()) return stolen_job.value();
 			}
+			while(steal_index != worker_index);
 			return nullptr;
 		}
 
