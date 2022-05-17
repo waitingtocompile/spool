@@ -6,6 +6,7 @@
 #include <ranges>
 #include <array>
 #include <type_traits>
+#include <cassert>
 
 #include "concepts.h"
 #include "wsq.h"
@@ -45,22 +46,30 @@ namespace spool
 		std::shared_ptr<job> job;
 		std::shared_ptr<input_data<T>> data;
 	};
+	
+	enum class attach_result
+	{
+		attached_and_ran, already_worker, max_already_attached
+	};
 
 	class thread_pool final
 	{
 	public:
 
-		thread_pool(unsigned int thread_count = std::thread::hardware_concurrency())
-			:unassigned_jobs(max_unassigned_jobs)
+		thread_pool(unsigned int thread_count = std::thread::hardware_concurrency(), unsigned int attachable_workers = 0)
+			:unassigned_jobs(max_unassigned_jobs),
+			unattached_workers(attachable_workers)
 		{
-			assert(thread_count > 0);
-			for (unsigned int i = 0; i < thread_count; i++)
+			assert(thread_count >= 0);
+			assert(attachable_workers >= 0);
+			assert(thread_count + attachable_workers > 0);
+			for (unsigned int i = 0; i < thread_count + attachable_workers; i++)
 			{
-				worker_threads.emplace_back(i);
+				workers.emplace_back(i);
 			}
 			for (unsigned int i = 0; i < thread_count; i++)
 			{
-				worker_threads[i].thread = std::thread(run_worker, this, i);
+				child_threads.emplace_back(run_worker, this, i);
 			}
 		}
 
@@ -73,6 +82,22 @@ namespace spool
 		//moving or copying breaks so much, so we simply won't permit it
 		thread_pool(const thread_pool& other) = delete;
 		thread_pool(thread_pool&& other) = delete;
+
+		attach_result attach_as_worker()
+		{
+			if(get_execution_context().pool != nullptr)
+			{
+				return attach_result::already_worker;
+			}
+			const auto attachment = unattached_workers.fetch_sub(1);
+			if(attachment <= 0)
+			{
+				return attach_result::max_already_attached;
+			}
+			workers.at(workers.size() - attachment).run(this);
+			thread_pool::context.pool = nullptr;
+			return attach_result::attached_and_ran;
+		}
 
 #pragma region base_job
 
@@ -137,7 +162,7 @@ namespace spool
 			requires std::invocable<F, range_underlying<R>&>
 		std::vector<std::shared_ptr<job>> for_each(R& range, const F& work)
 		{
-			const auto chunks = detail::split_range(range, worker_threads.size());
+			const auto chunks = detail::split_range(range, workers.size());
 			std::vector<std::shared_ptr<job>> jobs;
 			std::ranges::for_each(chunks, [&](auto& chunk) {jobs.emplace_back(enqueue_job([=]() {std::ranges::for_each(chunk, work); })); });
 			return jobs;
@@ -148,7 +173,7 @@ namespace spool
 			requires std::invocable<F, range_underlying<R>&>
 		std::vector<std::shared_ptr<job>> for_each(R& range, const P& prerequisite, const F& work)
 		{
-			const auto chunks = detail::split_range(range, worker_threads.size());
+			const auto chunks = detail::split_range(range, workers.size());
 			std::vector<std::shared_ptr<job>> jobs;
 			std::ranges::for_each(chunks, [&](auto& chunk) {jobs.emplace_back(enqueue_job([=]() {std::ranges::for_each(chunk, work); }, prerequisite)); });
 			return jobs;
@@ -160,12 +185,10 @@ namespace spool
         {
             if (thread_pool::context.pool != nullptr)
             {
-                return { thread_pool::context.pool, thread_pool::context.pool->worker_threads[thread_pool::context.runner_index].active_job };
+                return { thread_pool::context.pool, thread_pool::context.pool->workers[thread_pool::context.runner_index].active_job };
             }
             else return { nullptr, nullptr };
         }
-
-
 
 		//prevent new tasks from being started by the thread pool
 		void exit()
@@ -173,15 +196,19 @@ namespace spool
 			exiting.test_and_set();
 		}
 
-		//tells the thread pool to not start new jobs, and then block the calling thread until all worker threads are finished, indicating the pool can be safely destroyed
-		void wait_exit()
+		//tells the thread pool to not start new jobs, and then block the calling thread until all worker threads are finished, indicating the pool can be safely destroyed, returns false if called from a worker thread and could not guarentee full wait cleanup
+		bool wait_exit()
 		{
 			exit();
-			for (auto& worker : worker_threads)
+			for (auto& thread : child_threads)
 			{
-				worker.thread.join();
+				if(thread.get_id() != std::this_thread::get_id() && thread.joinable())
+				{
+					thread.join();
+				}
 			}
-			worker_threads.clear();
+			workers.clear();
+			return thread_pool::context.pool != this;
 		}
 
 	private:
@@ -194,7 +221,6 @@ namespace spool
 			{}
 
 			detail::WorkStealingQueue<std::shared_ptr<job>> work_queue;
-			std::thread thread;
 			std::shared_ptr<job> active_job;
 			size_t worker_index;
 
@@ -215,7 +241,7 @@ namespace spool
 
                             while (!held_jobs.empty())
                             {
-                                pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
+                                pool->workers[worker_index].work_queue.push(held_jobs.back());
                                 held_jobs.pop_back();
                             }
                         }
@@ -230,7 +256,7 @@ namespace spool
                         //no job offered, dump our held jobs back
                         while (!held_jobs.empty())
                         {
-                            pool->worker_threads[worker_index].work_queue.push(held_jobs.back());
+                            pool->workers[worker_index].work_queue.push(held_jobs.back());
                             held_jobs.pop_back();
                         }
                     }
@@ -239,11 +265,14 @@ namespace spool
 
 		};
 
-		
+		struct additionalWorker
+		{
+
+		};
 
 		std::shared_ptr<job> next_job(size_t worker_index)
 		{
-			const std::optional<std::shared_ptr<job>> immediate_job = worker_threads[worker_index].work_queue.pop();
+			const std::optional<std::shared_ptr<job>> immediate_job = workers[worker_index].work_queue.pop();
 			if (immediate_job.has_value())
 			{
 				return immediate_job.value();
@@ -263,8 +292,8 @@ namespace spool
             {
 				steal_index++;
 				//if we've wrapped around, reset back
-				if (steal_index >= worker_threads.size()) steal_index = 0;
-				std::optional<std::shared_ptr<job>> stolen_job = worker_threads[steal_index].work_queue.steal();
+				if (steal_index >= workers.size()) steal_index = 0;
+				std::optional<std::shared_ptr<job>> stolen_job = workers[steal_index].work_queue.steal();
 				if (stolen_job.has_value()) return stolen_job.value();
 			}
 			while(steal_index != worker_index);
@@ -275,7 +304,7 @@ namespace spool
 		{
 			if (context.pool == this)
 			{
-				worker_threads[context.runner_index].work_queue.push(new_job);
+				workers[context.runner_index].work_queue.push(new_job);
 			}
 			else
 			{
@@ -285,11 +314,13 @@ namespace spool
 
 		static void run_worker(thread_pool* pool, size_t worker_index)
 		{
-			pool->worker_threads[worker_index].run(pool);
+			pool->workers[worker_index].run(pool);
 		}
 		
 		rigtorp::mpmc::Queue<std::shared_ptr<job>> unassigned_jobs;
-		std::deque<worker> worker_threads;
+		std::atomic_int unattached_workers;
+		std::deque<worker> workers;
+		std::deque<std::thread> child_threads;
 		std::atomic_flag exiting;
 
 		inline static thread_local detail::thread_context context = { nullptr, SIZE_MAX };

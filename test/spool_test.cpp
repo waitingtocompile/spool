@@ -259,3 +259,14 @@ TEST(spool_test, SharedResourceJob)
 	ASSERT_FALSE(violated.test()) << "Shared resource access was violated, multiple clashing writes or a read clashed with a write";
 }
 
+TEST(spool_test, AttachThread)
+{
+	spool::thread_pool pool(0, 1);
+	std::atomic_flag ran;
+	pool.enqueue_job([&]() {ran.test_and_set(); pool.exit(); });
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	ASSERT_FALSE(ran.test()) << "ran with no worker threads";
+	auto res = pool.attach_as_worker();
+	ASSERT_EQ(res, spool::attach_result::attached_and_ran) << "failed to attach worker";
+	ASSERT_TRUE(ran.test()) << "didn't run in attached worker";
+}
